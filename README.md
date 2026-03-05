@@ -1,138 +1,91 @@
 # ForecastBot
 
-**24/7 Parity Arbitrage Bot — ForecastEx Event Contracts via IBKR**
+**Prediction Market Scanner & Edge Detector — ForecastEx Event Contracts via IBKR**
+
+---
+
+## Current Status
+
+**Phase 0 — Observation Only (March 2026)**
+- Two scanners running, no orders placed, no capital at risk
+- Collecting data to validate edge frequency and depth before building execution engine
+- Target: 14-30 days of observation data
 
 ---
 
 ## What This Is
 
-ForecastBot monitors ForecastEx prediction market contracts (BTC, S&P 500, Nasdaq) 24/7 via Interactive Brokers. When YES_ask + NO_ask on any contract drops below $0.93, it executes both legs simultaneously, locking in guaranteed profit regardless of outcome.
+ForecastBot monitors ForecastEx (CME Event Contracts) prediction market contracts via Interactive Brokers. It has two components running simultaneously:
 
-**The math is permanent.** YES + NO always pays $1.00 at settlement. Buying both for less than $1.00 is risk-free profit. The edge exists because ForecastEx is illiquid and nobody else is automating it.
+### 1. kill_shot.py — Parity Arbitrage Scanner
+Scans for YES+NO pairs that sum to less than $0.99 (should always = $1.00). When `YES_ask + NO_ask < $0.93`, buying both legs locks in guaranteed profit.
 
----
+- Event-driven streaming — fires on every price tick, not a timer
+- 3-tick confirmation before alerting (prevents false positives)
+- Auto-reconnect, daily contract refresh at 09:31 ET
 
-## Shared Agent Workflow
+### 2. weather_edge.py — Directional Weather Edge Scanner
+Monitors KLAX (LAX airport) actual temperature vs market-implied probability on UHLAX contracts.
 
-- Agent contract for both Claude Code and Codex: `PROCESS.md`
-- Wake-up protocol after compaction: top of `CLAUDE.md`
-- Current task: `WORKBOARD.md`
-- Known errors: `ERRORS.md`
+**Core thesis:** Retail participants see the Weather Underground forecast, place a bet, and walk away. When actual temperature diverges from forecast — especially during Santa Ana wind events — the market price goes stale for 30-90 minutes. We catch that window.
+
+- Bidirectional: BUY_YES (Santa Ana spike) and BUY_NO (temp trending below threshold)
+- Santa Ana wind filter: suppresses NWS-based signals during offshore wind events
+- NWS API observations every 5 minutes
 
 ---
 
 ## Strategy
 
-| Strategy | Logic | When Active |
-|----------|-------|-------------|
-| **S1 — Parity Arb** | YES_ask + NO_ask < $0.93 → buy both → lock profit | During catalyst events (3–8×/month) |
-| **S2 — Carry Harvest** | Hedged pairs earning 3.14% APY on idle capital | Always — capital never idle |
-
-**Phase 1 only.** No MUTEX baskets, no monotonic chains, no calendar spreads. Those are Phase 2 after parity engine is proven.
+| Strategy | Logic | Scanner |
+|----------|-------|---------|
+| **Parity Arb** | YES_ask + NO_ask < $0.93 → buy both → lock profit | kill_shot.py |
+| **Weather Edge** | Actual temp diverges from forecast → market mispriced | weather_edge.py |
 
 ---
 
 ## Contract Universe
 
-Three categories. All others excluded.
-
-| Category | Why | Hours |
-|----------|-----|-------|
-| **BTC Highest Price 2026** | 24/7 underlying, weekend gaps, no competition 3AM | 168h/week |
-| **S&P 500 Futures (monthly)** | Highest OI (31.9K+), gaps on every NFP/CPI/FOMC | ~65h/week |
-| **Nasdaq Futures (monthly)** | Moves with ES, larger gaps ($0.09 confirmed) | ~65h/week |
-
-**ATM filter:** Only monitor contracts where YES_bid is between 15% and 85%. Recalculated every 60 seconds.
-
----
-
-## Market Reality (Confirmed Live March 4, 2026)
-
-```
-S&P Above 6,600:
-  Last trade: 2 days ago
-  Trades today: 0
-  Current sum: $1.01 — NO arb right now
-
-NO price 1-month chart:
-  Hit $0.14 in late February (sum ~$0.89, gap $0.11)
-  Persisted for hours
-  Nobody captured it — that's the entire edge
-```
-
-**Gaps are episodic, not continuous.** The bot does nothing most of the time, then executes with full conviction during catalyst events.
+| Symbol | Category | Type | Scanner |
+|--------|----------|------|---------|
+| **CBBTC** | BTC daily close | OPT/FORECASTX | kill_shot |
+| **METLS** | Silver daily price | OPT/FORECASTX | kill_shot |
+| **FES** | S&P 500 daily futures | FOP/FORECASTX | kill_shot |
+| **FF** | Fed Decision | OPT/FORECASTX | kill_shot |
+| **YXHBT** | Bitcoin Highest Price 2026 | OPT/FORECASTX | kill_shot |
+| **PNFED** | Presidential Fed Chair | OPT/FORECASTX | kill_shot |
+| **JPDEC** | Bank of Japan Decision | OPT/FORECASTX | kill_shot |
+| **UHLAX** | LA daily high temperature | OPT/FORECASTX | weather_edge |
 
 ---
 
-## Architecture
+## Architecture (Current — Phase 0)
 
 ```
-┌──────────────────────────────────────────────────────┐
-│               CONTRACT UNIVERSE                       │
-│   BTC (24/7)     S&P (mkt hours)    NQ (mkt hours)   │
-│   ATM filter — near-ATM only, updates every 60s      │
-└──────────────────────┬───────────────────────────────┘
-                       │ bid/ask ticks via ib_async
-┌──────────────────────▼───────────────────────────────┐
-│              CATALYST CALENDAR                        │
-│  NORMAL (10s scan)  ←→  CATALYST (500ms scan)        │
-│  Switches T-30min before HIGH/CRITICAL events        │
-│  Stays CATALYST for 4h after event                   │
-└──────────────────────┬───────────────────────────────┘
-                       │
-┌──────────────────────▼───────────────────────────────┐
-│              GAP DETECTOR                             │
-│  sum = yes_ask + no_ask (ASK ONLY — never bid)       │
-│  GapSignal.EXECUTE  → sum < 0.93                     │
-│  GapSignal.ALERT    → sum < 0.97 and falling fast    │
-│  GapSignal.NONE     → no action                      │
-└──────────────────────┬───────────────────────────────┘
-                       │
-┌──────────────────────▼───────────────────────────────┐
-│              VALIDATOR (8 gates)                      │
-│  Stale price → OI limit → capital → position limit   │
-│  Every rejection logged with DROP CODE               │
-└──────────────────────┬───────────────────────────────┘
-                       │
-┌──────────────────────▼───────────────────────────────┐
-│              EXECUTOR (ONLY order submitter)          │
-│  Phase 1: both legs within 200ms                     │
-│  Phase 2: chase unfilled leg ($0.01 × 3 retries)    │
-│  Phase 3: unwind filled leg if hedge impossible      │
-└──────────────────────┬───────────────────────────────┘
-                       │
-┌──────────────────────▼───────────────────────────────┐
-│        POSITION MANAGER + RISK ENGINE                 │
-│  Capital state: CARRY_ONLY → ALERT → PARTIAL_ARB     │
-│  Kill switch: T1 WARNING / T2 DEFENSIVE / T3 KILL    │
-│  Carry harvest: idle capital earning 3.14% APY       │
-└──────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────┐
+│           IB Gateway (127.0.0.1:4001)       │
+│           ib_async streaming ticks          │
+└────────┬──────────────────────┬─────────────┘
+         │ clientId=10          │ clientId=45
+         │                      │
+┌────────▼──────────┐  ┌───────▼──────────────┐
+│  kill_shot.py     │  │  weather_edge.py      │
+│  Parity scanner   │  │  Weather edge scanner │
+│  7 contracts      │  │  UHLAX + NWS API      │
+│  Tick-by-tick     │  │  5-min poll cycle      │
+│  3-tick confirm   │  │  Santa Ana filter      │
+└────────┬──────────┘  └───────┬──────────────┘
+         │                      │
+┌────────▼──────────────────────▼──────────────┐
+│            Output (observation only)          │
+│  data/*.csv          Telegram alerts          │
+│  all_ticks.csv       Gap alerts               │
+│  gap_events.csv      Weather edge signals     │
+│  gap_alerts.csv                               │
+└──────────────────────────────────────────────┘
 ```
 
-**Key rule:** `executor.py` is the ONLY component that submits orders to IBKR. Nothing else calls `ib.placeOrder()`.
-
----
-
-## Capital Allocation
-
-| Bucket | Amount USD | Purpose |
-|--------|-----------|---------|
-| Total working capital | $22,050 | $30K CAD × 0.735 |
-| Reserve (never deployed) | $2,205 | 10% hard floor |
-| Active (arb + carry) | $19,845 | 90% always working |
-| Max single arb trade | $8,000 | Position sizing cap |
-| Min single arb trade | $2,000 | Skip below this |
-| Max concurrent positions | 3 | Hard limit |
-
----
-
-## Risk Management
-
-| Tier | Trigger | Action |
-|------|---------|--------|
-| **T1 WARNING** | Unhedged leg > 15s OR loss > $50 | No new arb, prioritise fill |
-| **T2 DEFENSIVE** | Unhedged > 40s OR daily loss > $200 | Stop new arb, manage existing |
-| **T3 KILL** | Unhedged > 90s OR daily loss > $500 OR API disconnect > 60s | Close all, halt, alert, manual restart |
+**No orders. No database. No execution engine.** Phase 0 is observation only.
 
 ---
 
@@ -141,13 +94,11 @@ NO price 1-month chart:
 | Component | Technology |
 |-----------|-----------|
 | Language | Python 3.11 |
-| IBKR library | `ib_async` (NOT ib_insync — dead since 2024) |
-| Architecture | Single-process asyncio |
-| Database | PostgreSQL |
-| Deployment | VPS Ubuntu 22.04, IB Gateway daemon |
-| Alerting | Telegram Bot API |
-| Scheduling | APScheduler |
-| Logging | structlog JSON |
+| IBKR library | `ib_async` (NOT ib_insync) |
+| Weather data | NWS API (api.weather.gov) |
+| Persistence | CSV files in `data/` |
+| Alerting | Telegram Bot API (optional) |
+| Config | `.env` + python-dotenv |
 
 ---
 
@@ -155,23 +106,27 @@ NO price 1-month chart:
 
 ```
 forecastbot/
-├── config.py                 # ALL tunable parameters — never hardcode
-├── main.py                   # Async entry point
 ├── CLAUDE.md                 # AI agent instructions
-├── PROCESS.md                # Workflow gates, commit contract
+├── CLAUDE_CODE_HANDOFF.md    # Handoff context document
+├── README.md                 # This file
 ├── WORKBOARD.md              # Current task tracking
-├── SPEC.md                   # Full system specification
 ├── ERRORS.md                 # Known errors and solutions
+├── PROCESS.md                # Workflow gates, commit contract
+├── SPECV2.md                 # Full system specification
+├── README_PHASE0.md          # Phase 0 run guide
 │
-├── core/                     # Connection, market data, models
-├── universe/                 # Contract discovery, catalyst calendar, gap detector
-├── strategies/               # S1 parity, S2 carry
-├── execution/                # Validator, executor, fill tracker
-├── positions/                # Position manager, reconciler, P&L
-├── risk/                     # Kill switch, Telegram alerts
-├── persistence/              # PostgreSQL
-├── scripts/                  # test_connection, discover_contracts, simulate_gap
-└── tests/                    # Unit + integration tests
+├── kill_shot.py              # Parity gap scanner (v2.0)
+├── weather_edge.py           # Weather edge scanner (v3.0)
+├── weather_edge_old.py       # Previous version (archive)
+├── discover_contracts.py     # Contract discovery tool
+├── discover_contracts1.py    # Earlier discovery version
+├── what_exists.py            # Utility script
+│
+├── requirements.txt          # ib_async, python-dotenv, requests
+├── .env                      # Local config (git-ignored)
+├── data/                     # CSV log output
+├── archive/                  # Archived files
+└── venv/                     # Python virtual environment
 ```
 
 ---
@@ -179,72 +134,60 @@ forecastbot/
 ## Getting Started
 
 ```bash
-# Prerequisites
-# - Python 3.11
-# - PostgreSQL running
-# - IB Gateway (paper account) running on port 7497
-# - Telegram bot token + chat ID in .env
+# Prerequisites: Python 3.11, IB Gateway running at 127.0.0.1:4001
 
-git clone <repo>
 cd forecastbot
-cp .env.example .env          # Fill in IBKR credentials, Telegram token
-make setup                    # Create venv, install deps
-python scripts/test_connection.py   # Verify IBKR connects
-make test                     # All tests pass
+python3.11 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+
+# Create .env (see .env for reference)
+# IBKR_HOST=127.0.0.1
+# IBKR_PORT=4001
+# IBKR_CLIENT_ID=10
+# IBKR_CLIENT_ID_WEATHER=45
+
+# Step 1: Discover contracts
+python3 discover_contracts.py
+
+# Step 2: Run parity scanner (continuous)
+python3 kill_shot.py
+
+# Step 3: Run weather edge scanner (alongside, separate terminal)
+python3 weather_edge.py
 ```
+
+---
+
+## Capital Allocation
+
+| Bucket | Amount | Purpose |
+|--------|--------|---------|
+| Observation allocation | $5K-$10K USD | Available when execution engine built |
+| Currently at risk | **$0** | Phase 0 — observation only |
 
 ---
 
 ## Phase Gates
 
-| Gate | Pass Condition |
-|------|----------------|
-| **0 — Infrastructure** | ib_async connects, contracts discovered, bid/ask streaming, PostgreSQL writes, Telegram fires |
-| **1 — Catalyst Monitor** | Mode switches NORMAL↔CATALYST, gap formation detected, ATM filter working |
-| **2 — Execution** | Both-leg fills on paper > 80%, zero unhedged > 30s, carry deployed, positions survive restart |
-| **3 — Risk + Live Probe** | Kill switch tiers all working, live $2K CAD fills within $0.01 of detected gap |
-| **4 — Full Deployment** | $30K CAD live, 7 days without manual intervention, first catalyst event captured |
+| Gate | Pass Condition | Status |
+|------|----------------|--------|
+| **0 — Observation** | 14-30 days data collected, Decision Matrix evaluated | **IN PROGRESS** |
+| 1 — Infrastructure | ib_async connects, PostgreSQL, Telegram, ATM filter | BLOCKED |
+| 2 — Execution | Both-leg fills on paper > 80%, carry deployed | BLOCKED |
+| 3 — Risk + Live Probe | Kill switch tiers, $2K CAD live probe | BLOCKED |
+| 4 — Full Deployment | Full capital, 7 days unattended, first catalyst captured | BLOCKED |
 
 ---
 
-## Expected Returns (Base Case)
-
-| Scenario | Gap Events/Month | Monthly USD | Monthly CAD | Annual Return |
-|----------|-----------------|-------------|-------------|---------------|
-| Pessimistic | 1 | ~$880 | ~$1,197 | ~49% |
-| **Base Case** | **4** | **~$3,960** | **~$5,386** | **~196%** |
-| Optimistic | 8 | ~$8,800 | ~$11,968 | ~470% |
-| Carry baseline | — | ~$51 | ~$69 | floor |
-
-*Base case unconfirmed — 2-week observation at Gate 1 establishes actual frequency.*
-
----
-
-## Key Configuration
-
-All parameters in `config.py`. Never hardcode.
-
-```python
-ENTRY_THRESHOLD = 0.93          # Max YES_ask + NO_ask to enter
-MIN_NET_PROFIT = 0.02           # Min profit after slippage estimate
-MAX_SINGLE_TRADE_USD = 8000     # Hard cap per trade
-MAX_CONCURRENT_POSITIONS = 3    # Hard limit
-SCAN_INTERVAL_NORMAL_SEC = 10   # Normal mode
-SCAN_INTERVAL_CATALYST_MS = 500 # Catalyst mode
-KILL_T3_DAILY_LOSS_USD = 500    # Nuclear stop
-```
-
----
-
-## Critical Rules
+## Critical Rules (Apply When Execution Engine Built)
 
 1. **ASK prices only** — never bid, never last traded
-2. **executor.py is the only order submitter** — nothing else calls `ib.placeOrder()`
+2. **Single order submitter** — only one component places orders
 3. **Risk engine runs before execution** — every time
-4. **Reconcile positions on every startup** — DB vs IBKR broker
-5. **Catalyst mode for 4h post-event** — most gaps open after, not at, release time
-6. **ForecastEx P&L = $1.00 − (yes_cost + no_cost)** — no sell orders exist
-7. **Log every rejected opportunity with a drop code** — this is how you debug silence
+4. **Reconcile positions on every startup**
+5. **ForecastEx P&L = $1.00 - (yes_cost + no_cost)** — no sell orders exist
+6. **Log every rejected opportunity with a drop code**
 
 ---
 

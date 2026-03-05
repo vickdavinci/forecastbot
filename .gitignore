@@ -1,0 +1,21 @@
+# Environment
+.env
+venv/
+
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Office temp files
+~$*
+
+# IDE
+.vscode/
+.idea/
+
+# Data logs (large, regenerated)
+data/*.csv

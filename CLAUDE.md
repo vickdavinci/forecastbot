@@ -32,15 +32,17 @@ head -60 WORKBOARD.md
 # 3. Check git status for uncommitted work
 git status && git branch
 
-# 4. Verify IBKR paper account connection (if doing execution work)
-python scripts/test_connection.py
-# Expected: Connected to paper account, ForecastEx contracts discoverable
+# 4. Verify IB Gateway connection (if doing scanner work)
+# IB Gateway must be running at 127.0.0.1:4001
+python3 discover_contracts.py
+# Expected: Contracts discovered, prices streaming
 ```
 
 **Why this matters:**
 - WORKBOARD.md tracks what task is in progress
 - You may have uncommitted changes from before compaction
-- IBKR connection state is not preserved between sessions
+- IB Gateway connection state is not preserved between sessions
+- kill_shot.py uses clientId from .env (default 10), weather_edge.py uses clientId=45
 
 ---
 
@@ -56,51 +58,54 @@ python scripts/test_connection.py
 
 ```bash
 # Setup (first time)
-make setup                          # Create venv, install deps
+python3.11 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt     # ib_async, python-dotenv, requests
 
-# Run all tests
-make test                           # or: pytest
+# Phase 0 — Run scanners (requires IB Gateway at 127.0.0.1:4001)
+python3 discover_contracts.py       # Discover ForecastEx contracts
+python3 kill_shot.py                # Parity gap scanner (runs continuously)
+python3 weather_edge.py             # Weather edge scanner (separate terminal, clientId=45)
 
-# Run single test file
-pytest tests/test_s1_parity.py -v
-
-# Run single test function
-pytest tests/test_s1_parity.py::test_gap_detected_on_ask_prices -v
-
-# Run risk engine tests only
-pytest tests/test_risk.py -v
-
-# Run execution tests (partial fill, retry, unwind)
-pytest tests/test_execution.py -v
-
-# Run gap detector tests
-pytest tests/test_gap_detector.py -v
-
-# Lint
-make lint                           # black + isort
-
-# Validate config
-make validate-config                # All required params present
-
-# Test IBKR paper connection
-python scripts/test_connection.py
-
-# Discover live ForecastEx contracts (read-only, no orders)
-python scripts/discover_contracts.py
-
-# Simulate gap event (for scanner testing without live market)
-python scripts/simulate_gap.py --contract BTC_90K --sum 0.89
+# Check output
+ls data/                            # CSV log files
+cat data/gap_events.csv             # Gap events detected
+cat data/gap_alerts.csv             # Profitable gaps only
 ```
+
+### Future (Gate 1+)
+```bash
+# These commands will apply when the module structure is built:
+make test                           # pytest
+make lint                           # black + isort
+pytest tests/test_s1_parity.py -v   # Individual test files
+```
+
+---
+
+## Current Phase: Phase 0 — Observation Only
+
+**No orders. No execution engine. No database. CSV logging only.**
+Two scanners running, collecting data to validate edge before building execution.
 
 ---
 
 ## Project Overview
 
-**ForecastBot** is a 24/7 parity arbitrage bot trading ForecastEx event contracts via Interactive Brokers. It monitors BTC, S&P 500, and Nasdaq prediction market contracts, detects YES+NO sum violations below $0.93, and executes dual-leg limit orders to lock in guaranteed profit.
+**ForecastBot** is a prediction market scanner and edge detector trading on **ForecastEx** (CME Event Contracts) via Interactive Brokers (IBKR). Accessible in Canada through IBKR's ForecastTrader interface.
 
-**Phase 1 Strategy:**
-- **S1 — Parity Arbitrage**: YES_ask + NO_ask < $0.93 → buy both → profit locked at entry
-- **S2 — Carry Harvest**: Deploy idle capital in hedged pairs earning 3.14% APY (capital floor, not primary alpha)
+**Two components running simultaneously:**
+
+### 1. kill_shot.py (v2.0) — Parity Arbitrage Scanner
+Scans for YES+NO pairs that sum to less than $0.99. When `YES_ask + NO_ask < $0.93`, buying both legs locks in guaranteed profit. Event-driven streaming — fires on every price tick, not a timer. 3-tick confirmation before alerting.
+
+### 2. weather_edge.py (v3.0) — Directional Weather Edge Scanner
+Monitors KLAX (LAX airport) actual temperature vs market-implied probability on UHLAX contracts. Retail bets on Weather Underground forecast and walks away — when actual temp diverges (especially Santa Ana winds), market price is stale 30-90 min. Bidirectional: BUY_YES and BUY_NO.
+
+**Contract Universe (current):**
+- Daily: CBBTC (BTC close), METLS (Silver), FES (S&P futures, FOP type)
+- Monthly/Long-dated: FF (Fed), YXHBT (BTC Highest 2026), PNFED (Presidential Fed Chair), JPDEC (BOJ)
+- Weather: UHLAX (LA daily high temperature)
 
 **Key Market Reality (confirmed from live data March 4, 2026):**
 - ForecastEx is illiquid most of the time (0 trades observed on primary contract)
@@ -108,100 +113,69 @@ python scripts/simulate_gap.py --contract BTC_90K --sum 0.89
 - When gaps open they persist for hours — no competition capturing them
 - **Always use ASK prices.** Web UI shows last-traded prices which can be 2 days stale.
 
-**Budget:** $30,000 CAD (~$22,050 USD active capital)
-**Max positions:** 3 concurrent
+**Budget:** $5K-$10K USD observation allocation ($0 at risk in Phase 0)
 
 ---
 
-## Repository Structure
+## Repository Structure (Actual — Phase 0)
 
 ```
 forecastbot/
-├── config.py                     # ALL tunable parameters — never hardcode
-├── main.py                       # Async entry point, event loop
-├── requirements.txt              # Pinned dependencies
-├── .env.example                  # Environment variable template (never commit .env)
-├── Makefile                      # Workflow automation
-├── .python-version               # Python 3.11
-│
 ├── CLAUDE.md                     # This file — AI agent instructions
+├── CLAUDE_CODE_HANDOFF.md        # Handoff context document
 ├── README.md                     # Project overview
+├── README_PHASE0.md              # Phase 0 run guide
 ├── WORKBOARD.md                  # Current task tracking
-├── SPEC.md                       # Full system specification (source of truth)
+├── SPECV2.md                     # Full system specification
 ├── PROCESS.md                    # Workflow gates, commit contract
 ├── ERRORS.md                     # Known errors and solutions
 │
-├── core/
-│   ├── connection.py             # ib_async connection, auto-reconnect
-│   ├── market_data.py            # Quote streaming, tick handling, staleness check
-│   └── models.py                 # Contract, Position, ArbOpportunity dataclasses
+├── kill_shot.py                  # Parity gap scanner (v2.0, event-driven)
+├── weather_edge.py               # Weather edge scanner (v3.0, async)
+├── weather_edge_old.py           # Previous version (archive)
+├── discover_contracts.py         # Contract discovery tool
+├── discover_contracts1.py        # Earlier discovery version
+├── what_exists.py                # Utility script
 │
-├── universe/
-│   ├── contract_universe.py      # Discovery, ATM filter, subscription management
-│   ├── catalyst_calendar.py      # Event calendar, scan mode switching (NORMAL/CATALYST)
-│   └── gap_detector.py           # GapFormationDetector, sum velocity tracking
-│
-├── strategies/
-│   ├── s1_parity.py              # Parity arb scanner — ASK prices only
-│   └── s2_carry.py               # Carry harvest, unwind priority queue
-│
-├── execution/
-│   ├── validator.py              # All 8 validation gates, drop code logging
-│   ├── executor.py               # Dual-leg Phase 1/2/3 with retry and unwind
-│   └── fill_tracker.py           # Fill callbacks, unhedged detection, timer
-│
-├── positions/
-│   ├── position_manager.py       # Capital state machine, open position tracking
-│   ├── reconciler.py             # DB vs IBKR reconciliation on startup
-│   └── pnl.py                    # P&L: $1.00 - (yes_cost + no_cost)
-│
-├── risk/
-│   ├── risk_engine.py            # Tiered kill switch (T1/T2/T3)
-│   └── alerts.py                 # Telegram bot alerts
-│
-├── persistence/
-│   ├── database.py               # PostgreSQL connection
-│   └── schema.sql                # Table definitions
-│
-├── scripts/
-│   ├── test_connection.py        # Verify IBKR paper account connects
-│   ├── discover_contracts.py     # Dump live ForecastEx contract universe
-│   ├── simulate_gap.py           # Inject fake gap event for scanner testing
-│   └── daily_report.py           # Generate daily P&L summary
-│
-└── tests/
-    ├── test_s1_parity.py         # Gap detection with ASK prices
-    ├── test_execution.py         # Phase 1/2/3 retry, unwind logic
-    ├── test_risk.py              # Kill switch tiers
-    ├── test_carry_unwind.py      # Priority queue ordering
-    ├── test_gap_detector.py      # Sum velocity, GapSignal enum
-    └── test_reconciler.py        # DB vs broker reconciliation
+├── requirements.txt              # ib_async, python-dotenv, requests
+├── .env                          # Local config (git-ignored)
+├── data/                         # CSV log output
+│   ├── all_ticks.csv             # Every tick with valid data
+│   ├── gap_events.csv            # Gaps below breakeven
+│   ├── gap_alerts.csv            # Profitable gaps only
+│   └── daily_summary.csv         # Daily stats
+├── archive/                      # Archived files
+└── venv/                         # Python virtual environment
 ```
 
 ---
 
-## Component Map
+## Component Map (Phase 0 — Current)
 
-**Single index for the entire system.** When debugging or modifying any component, read the spec section first.
+| Component | File | Description |
+|-----------|------|-------------|
+| **Parity Scanner** | `kill_shot.py` | Event-driven tick-by-tick gap detection, 7 contracts, 3-tick confirmation, auto-reconnect |
+| **Weather Edge** | `weather_edge.py` | UHLAX temperature edge, NWS API, Santa Ana filter, bidirectional signals |
+| **Contract Discovery** | `discover_contracts.py` | Find ForecastEx contracts, print near-ATM strikes |
 
-### Core Components
+### Future Components (Gate 1+)
 
-| Component | File | Spec Section | Description |
-|-----------|------|--------------|-------------|
-| **Contract Universe** | `universe/contract_universe.py` | SPEC.md §5 | Discovers BTC/SP/NQ contracts, ATM filter, subscription mgmt |
-| **Catalyst Calendar** | `universe/catalyst_calendar.py` | SPEC.md §4.2 | NFP/CPI/FOMC dates, NORMAL↔CATALYST mode switching |
-| **Gap Detector** | `universe/gap_detector.py` | SPEC.md §4.3 | Sum velocity tracking, GapSignal.EXECUTE/ALERT/NONE |
-| **S1 Parity Scanner** | `strategies/s1_parity.py` | SPEC.md §1 | ASK-only gap detection, opportunity events |
-| **S2 Carry** | `strategies/s2_carry.py` | SPEC.md §1 | Idle capital deployment, unwind priority queue |
-| **Validator** | `execution/validator.py` | SPEC.md §6.1 | 8 validation gates, drop code logging |
-| **Executor** | `execution/executor.py` | SPEC.md §6.2 | Dual-leg Phase 1/2/3, retry, unwind |
-| **Fill Tracker** | `execution/fill_tracker.py` | SPEC.md §6.2 | Fill callbacks, unhedged leg timer |
-| **Position Manager** | `positions/position_manager.py` | SPEC.md §8 | Capital state machine, 3-position limit |
-| **Reconciler** | `positions/reconciler.py` | SPEC.md §6.2 | DB vs IBKR on startup |
+| Component | Planned File | Description |
+|-----------|-------------|-------------|
+| **Contract Universe** | `universe/contract_universe.py` | ATM filter, subscription management |
+| **Catalyst Calendar** | `universe/catalyst_calendar.py` | NFP/CPI/FOMC dates, NORMAL/CATALYST mode |
+| **Gap Detector** | `universe/gap_detector.py` | Sum velocity tracking, GapSignal |
+| **S1 Parity Scanner** | `strategies/s1_parity.py` | ASK-only gap detection |
+| **S2 Carry** | `strategies/s2_carry.py` | Idle capital deployment |
+| **Validator** | `execution/validator.py` | 8 validation gates, drop code logging |
+| **Executor** | `execution/executor.py` | Dual-leg Phase 1/2/3, retry, unwind |
+| **Fill Tracker** | `execution/fill_tracker.py` | Fill callbacks, unhedged leg timer |
+| **Position Manager** | `positions/position_manager.py` | Capital state machine |
+| **Reconciler** | `positions/reconciler.py` | DB vs IBKR on startup |
 | **Risk Engine** | `risk/risk_engine.py` | SPEC.md §7 | T1 WARNING / T2 DEFENSIVE / T3 KILL |
 | **Alerts** | `risk/alerts.py` | SPEC.md §9 | Telegram: gaps, fills, kills, daily summary |
 
-### Ownership Boundaries (CRITICAL — Prevents Plumbing Bugs)
+### Ownership Boundaries (Gate 1+ — Prevents Plumbing Bugs)
 
 ```
 gap_detector.py         owns: sum calculation, velocity, GapSignal emission
@@ -216,7 +190,7 @@ risk_engine.py          owns: kill switch tiers — evaluated BEFORE any executi
 
 ---
 
-## Blast Radius Control (MANDATORY — Include in All Prompts)
+## Blast Radius Control (Gate 1+ — Apply When Module Structure Exists)
 
 When modifying gap detection logic:
 ```
@@ -307,13 +281,25 @@ pytest tests/[relevant_test].py -v
 
 ```python
 # ForecastEx contracts in IBKR TWS API:
-secType  = "OPT"
+secType  = "OPT"    # Most contracts (CBBTC, METLS, UHLAX, FF, YXHBT, PNFED, JPDEC)
+secType  = "FOP"    # FES (S&P futures) uses FOP, not OPT
 exchange = "FORECASTX"
 YES      = Call (right="C")
 NO       = Put  (right="P")
 
-# Discovery:
-ib.reqContractDetails(Contract(secType="OPT", exchange="FORECASTX", symbol="BTC"))
+# Current contract symbols:
+# CBBTC  — BTC daily close
+# METLS  — Silver daily price
+# FES    — S&P 500 daily futures (FOP type!)
+# UHLAX  — LA daily high temperature
+# FF     — Fed Decision
+# YXHBT  — Bitcoin Highest Price 2026
+# PNFED  — Presidential Fed Chair
+# JPDEC  — Bank of Japan Decision
+
+# IB Gateway connection:
+# Host: 127.0.0.1, Port: 4001
+# clientId=10 (kill_shot.py), clientId=45 (weather_edge.py)
 
 # IBKR library — use ib_async (NOT ib_insync — unmaintained since 2024):
 pip install ib_async
@@ -373,7 +359,8 @@ Every rejected opportunity must be logged with one of these codes:
 
 | Gate | When | Pass Condition |
 |------|------|----------------|
-| **Gate 0** | Week 1 | ib_async connects. Contract discovery returns BTC/SP/NQ contracts. Live bid/ask streaming on ≥ 5 contracts. Telegram alert fires. PostgreSQL writes working. |
+| **Phase 0** | Current | kill_shot.py + weather_edge.py running. 14-30 days observation data. Decision Matrix evaluated. |
+| **Gate 0** | After Phase 0 GO | ib_async connects. Contract discovery returns contracts. Live bid/ask streaming. Telegram alert fires. PostgreSQL writes working. |
 | **Gate 1** | Week 1–2 | Catalyst calendar loaded. Mode switches NORMAL→CATALYST. GapFormationDetector fires ALERT on simulated sum drop. ATM filter subscribes/unsubscribes correctly. |
 | **Gate 2** | Week 2–3 | S1 scanner uses ASK only. All 8 gates implemented and logging drop codes. Dual-leg execution Phase 1/2/3 working on paper. Carry deployed on idle capital. Positions survive restart. |
 | **Gate 3** | Week 3–4 | All 3 kill switch tiers working. TIER 3 halts and requires manual restart. IB Gateway reconnect recovers state. Live probe ($2,000 CAD) fills within $0.01 of detected gap. |
@@ -406,7 +393,7 @@ AUTO-TRIGGER to CATALYST (regardless of calendar):
 
 ---
 
-## Execution Phase Reference
+## FUTURE ROADMAP — Execution Phase Reference (Not Yet Built)
 
 ```
 PHASE 1 — SUBMIT (T+0):
@@ -503,13 +490,21 @@ See `ERRORS.md` for solutions. Key issues:
 
 *(Update this section after every significant commit)*
 
-### Current Version: Gate 0
+### Current Version: Phase 0 — Observation
 
-**Status:** Infrastructure phase — not yet trading
+**Status:** Two scanners running, collecting observation data
 
-**Next task:** See WORKBOARD.md
+| Date | Change |
+|------|--------|
+| Mar 5, 2026 | Updated all docs from CLAUDE_CODE_HANDOFF.md — reflects actual state |
+| Mar 5, 2026 | weather_edge.py v3.0 — full async architecture, Santa Ana filter |
+| Mar 5, 2026 | kill_shot.py v2.0 — event-driven streaming, 7 contracts, 3-tick confirm |
+| Mar 4, 2026 | discover_contracts.py — contract discovery tool |
+| Mar 4, 2026 | Project initialized — Phase 0 observation plan |
+
+**Next task:** Verify weather_edge.py v3.0 IB price feed (see WORKBOARD.md)
 
 ---
 
-*ForecastBot CLAUDE.md v1.0 — March 4, 2026*
-*Modelled on Alpha NextGen V2 CLAUDE.md patterns*
+*ForecastBot CLAUDE.md v1.1 — March 5, 2026*
+*Updated from CLAUDE_CODE_HANDOFF.md to reflect actual project state*

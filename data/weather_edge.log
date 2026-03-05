@@ -1,0 +1,278 @@
+2026-03-05 14:15:04,390 [INFO]   Fetching opening forecast...
+2026-03-05 14:15:04,488 [INFO]   Opening forecast high: 72.0°F
+2026-03-05 14:15:04,488 [INFO]   Fetching initial UHLAX market prices (optional)...
+2026-03-05 14:15:04,732 [INFO] Connecting to 127.0.0.1:4001 with clientId 45...
+2026-03-05 14:15:04,733 [INFO] Connected
+2026-03-05 14:15:04,736 [INFO] Logged on to server version 178
+2026-03-05 14:15:04,737 [INFO] Warning 2104, reqId -1: Market data farm connection is OK:usfarm
+2026-03-05 14:15:04,737 [INFO] Warning 2107, reqId -1: HMDS data farm connection is inactive but should be available upon demand.ushmds
+2026-03-05 14:15:04,738 [INFO] Warning 2158, reqId -1: Sec-def data farm connection is OK:secdefnj
+2026-03-05 14:15:04,738 [INFO] API connection ready
+2026-03-05 14:15:05,079 [INFO] Synchronization complete
+2026-03-05 14:15:05,149 [INFO] Warning 2119, reqId -1: Market data farm is connecting:usopt.nj
+2026-03-05 14:15:05,552 [INFO] Warning 2104, reqId -1: Market data farm connection is OK:usopt.nj
+2026-03-05 14:16:29,165 [INFO] Disconnecting from 127.0.0.1:4001, 3.24 kB sent in 65 messages, 31.7 kB received in 639 messages, session time 84.4 s.
+2026-03-05 14:16:29,165 [INFO] Disconnecting
+2026-03-05 14:16:29,165 [INFO] Disconnected.
+2026-03-05 14:16:29,166 [INFO]   IB prices not available — running in forecast-only mode
+2026-03-05 14:16:29,166 [INFO] 
+  Polling... (Ctrl+C to stop)
+
+2026-03-05 14:26:39,503 [WARNING]   NWS obs fetch failed: HTTPSConnectionPool(host='api.weather.gov', port=443): Read timed out. (read timeout=10)
+2026-03-05 14:26:39,503 [WARNING]   Observation fetch failed, retrying in 60s...
+2026-03-05 14:27:39,605 [INFO] Connecting to 127.0.0.1:4001 with clientId 45...
+2026-03-05 14:27:39,606 [INFO] Connected
+2026-03-05 14:27:39,608 [INFO] Logged on to server version 178
+2026-03-05 14:27:39,609 [INFO] Warning 2104, reqId -1: Market data farm connection is OK:usfarm
+2026-03-05 14:27:39,610 [INFO] Warning 2107, reqId -1: HMDS data farm connection is inactive but should be available upon demand.ushmds
+2026-03-05 14:27:39,610 [INFO] Warning 2158, reqId -1: Sec-def data farm connection is OK:secdefnj
+2026-03-05 14:27:39,610 [INFO] API connection ready
+2026-03-05 14:27:39,947 [INFO] Synchronization complete
+2026-03-05 14:27:39,991 [INFO] Warning 2119, reqId -1: Market data farm is connecting:usopt.nj
+2026-03-05 14:27:40,434 [INFO] Warning 2104, reqId -1: Market data farm connection is OK:usopt.nj
+2026-03-05 14:29:04,048 [INFO] Disconnecting from 127.0.0.1:4001, 3.24 kB sent in 65 messages, 31.7 kB received in 639 messages, session time 84.4 s.
+2026-03-05 14:29:04,049 [INFO] Disconnecting
+2026-03-05 14:29:04,049 [INFO] Disconnected.
+2026-03-05 14:31:13,178 [INFO] Connecting to 127.0.0.1:4001 with clientId 45...
+2026-03-05 14:31:13,179 [INFO] Connected
+2026-03-05 14:31:13,182 [INFO] Logged on to server version 178
+2026-03-05 14:31:13,183 [INFO] Warning 2104, reqId -1: Market data farm connection is OK:usopt.nj
+2026-03-05 14:31:13,183 [INFO] Warning 2104, reqId -1: Market data farm connection is OK:usfarm
+2026-03-05 14:31:13,183 [INFO] Warning 2107, reqId -1: HMDS data farm connection is inactive but should be available upon demand.ushmds
+2026-03-05 14:31:13,183 [INFO] Warning 2158, reqId -1: Sec-def data farm connection is OK:secdefnj
+2026-03-05 14:31:13,183 [INFO] API connection ready
+2026-03-05 14:31:13,620 [INFO] Synchronization complete
+2026-03-05 14:31:13,621 [INFO]   IB connected (clientId=45)
+2026-03-05 14:31:13,656 [INFO]   Subscribed 14 UHLAX strikes. Warming up 10s...
+2026-03-05 14:31:23,658 [INFO] 
+       K   YES_ASK    NO_ASK       SUM       GAP
+2026-03-05 14:31:23,658 [INFO]   ──────────────────────────────────────────────────
+2026-03-05 14:31:23,658 [INFO]       63       n/a       n/a
+2026-03-05 14:31:23,659 [INFO]       64       n/a       n/a
+2026-03-05 14:31:23,659 [INFO]       65       n/a       n/a
+2026-03-05 14:31:23,659 [INFO]       66       n/a       n/a
+2026-03-05 14:31:23,659 [INFO]       67       n/a       n/a
+2026-03-05 14:31:23,659 [INFO]       68       n/a       n/a
+2026-03-05 14:31:23,659 [INFO]       69       n/a       n/a
+2026-03-05 14:31:23,659 [INFO]       70       n/a       n/a
+2026-03-05 14:31:23,659 [INFO]       71       n/a       n/a
+2026-03-05 14:31:23,659 [INFO]       72       n/a       n/a
+2026-03-05 14:31:23,659 [INFO]       73       n/a       n/a
+2026-03-05 14:31:23,660 [INFO]       74       n/a       n/a
+2026-03-05 14:31:23,660 [INFO]       75       n/a       n/a
+2026-03-05 14:31:23,660 [INFO]       76       n/a       n/a
+2026-03-05 14:31:23,660 [INFO] 
+2026-03-05 14:31:23,660 [INFO]   ✓ IB price feed active — 14 strikes subscribed
+2026-03-05 14:31:23,660 [INFO]   Fetching opening NWS forecast...
+2026-03-05 14:31:23,761 [INFO]   Opening NWS forecast high: 72.0°F
+2026-03-05 14:31:23,761 [INFO] 
+  Polling... (Ctrl+C to stop)
+
+2026-03-05 14:31:23,787 [CRITICAL] 
+  FATAL: Invalid format specifier '.3f if traj >= 0 else 'n/a'' for object of type 'float'
+Traceback (most recent call last):
+  File "/Users/vigneshwaranarumugam/Documents/Trading Github/forecastbot/weather_edge.py", line 742, in main
+    print_poll(day, obs, edges)
+  File "/Users/vigneshwaranarumugam/Documents/Trading Github/forecastbot/weather_edge.py", line 574, in print_poll
+    print(f"  K{day.threshold:.0f}  NWS_prob={nws:.3f}  "
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: Invalid format specifier '.3f if traj >= 0 else 'n/a'' for object of type 'float'
+
+2026-03-05 14:31:23,788 [INFO] Disconnecting from 127.0.0.1:4001, 2.93 kB sent in 37 messages, 31.6 kB received in 638 messages, session time 10.6 s.
+2026-03-05 14:31:23,788 [INFO] Disconnecting
+2026-03-05 14:31:23,789 [INFO]   IB disconnected.
+2026-03-05 14:31:32,863 [INFO] Connecting to 127.0.0.1:4001 with clientId 45...
+2026-03-05 14:31:32,864 [INFO] Connected
+2026-03-05 14:31:32,867 [INFO] Logged on to server version 178
+2026-03-05 14:31:32,867 [INFO] Warning 2104, reqId -1: Market data farm connection is OK:usopt.nj
+2026-03-05 14:31:32,868 [INFO] Warning 2104, reqId -1: Market data farm connection is OK:usfarm
+2026-03-05 14:31:32,868 [INFO] Warning 2107, reqId -1: HMDS data farm connection is inactive but should be available upon demand.ushmds
+2026-03-05 14:31:32,868 [INFO] Warning 2158, reqId -1: Sec-def data farm connection is OK:secdefnj
+2026-03-05 14:31:32,868 [INFO] API connection ready
+2026-03-05 14:31:33,304 [INFO] Synchronization complete
+2026-03-05 14:31:33,304 [INFO]   IB connected (clientId=45)
+2026-03-05 14:31:33,341 [INFO]   Subscribed 14 UHLAX strikes. Warming up 10s...
+2026-03-05 14:31:43,342 [INFO] 
+       K   YES_ASK    NO_ASK       SUM       GAP
+2026-03-05 14:31:43,342 [INFO]   ──────────────────────────────────────────────────
+2026-03-05 14:31:43,343 [INFO]       63       n/a       n/a
+2026-03-05 14:31:43,343 [INFO]       64       n/a       n/a
+2026-03-05 14:31:43,343 [INFO]       65       n/a       n/a
+2026-03-05 14:31:43,343 [INFO]       66       n/a       n/a
+2026-03-05 14:31:43,343 [INFO]       67       n/a       n/a
+2026-03-05 14:31:43,343 [INFO]       68       n/a       n/a
+2026-03-05 14:31:43,343 [INFO]       69       n/a       n/a
+2026-03-05 14:31:43,343 [INFO]       70       n/a       n/a
+2026-03-05 14:31:43,343 [INFO]       71       n/a       n/a
+2026-03-05 14:31:43,343 [INFO]       72       n/a       n/a
+2026-03-05 14:31:43,343 [INFO]       73       n/a       n/a
+2026-03-05 14:31:43,343 [INFO]       74       n/a       n/a
+2026-03-05 14:31:43,343 [INFO]       75       n/a       n/a
+2026-03-05 14:31:43,344 [INFO]       76       n/a       n/a
+2026-03-05 14:31:43,344 [INFO] 
+2026-03-05 14:31:43,344 [INFO]   ✓ IB price feed active — 14 strikes subscribed
+2026-03-05 14:31:43,344 [INFO]   Fetching opening NWS forecast...
+2026-03-05 14:31:43,384 [INFO]   Opening NWS forecast high: 72.0°F
+2026-03-05 14:31:43,384 [INFO] 
+  Polling... (Ctrl+C to stop)
+
+2026-03-05 14:31:43,410 [CRITICAL] 
+  FATAL: Invalid format specifier '.3f if traj >= 0 else 'n/a'' for object of type 'float'
+Traceback (most recent call last):
+  File "/Users/vigneshwaranarumugam/Documents/Trading Github/forecastbot/weather_edge.py", line 742, in main
+    print_poll(day, obs, edges)
+  File "/Users/vigneshwaranarumugam/Documents/Trading Github/forecastbot/weather_edge.py", line 574, in print_poll
+    print(f"  K{day.threshold:.0f}  NWS_prob={nws:.3f}  "
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: Invalid format specifier '.3f if traj >= 0 else 'n/a'' for object of type 'float'
+
+2026-03-05 14:31:43,410 [INFO] Disconnecting from 127.0.0.1:4001, 2.93 kB sent in 37 messages, 31.6 kB received in 638 messages, session time 10.5 s.
+2026-03-05 14:31:43,410 [INFO] Disconnecting
+2026-03-05 14:31:43,411 [INFO]   IB disconnected.
+2026-03-05 14:35:16,017 [INFO] Connecting to 127.0.0.1:4001 with clientId 45...
+2026-03-05 14:35:16,018 [INFO] Connected
+2026-03-05 14:35:16,021 [INFO] Logged on to server version 178
+2026-03-05 14:35:16,022 [INFO] Warning 2104, reqId -1: Market data farm connection is OK:usfarm
+2026-03-05 14:35:16,022 [INFO] Warning 2107, reqId -1: HMDS data farm connection is inactive but should be available upon demand.ushmds
+2026-03-05 14:35:16,022 [INFO] Warning 2158, reqId -1: Sec-def data farm connection is OK:secdefnj
+2026-03-05 14:35:16,022 [INFO] API connection ready
+2026-03-05 14:35:16,360 [INFO] Synchronization complete
+2026-03-05 14:35:16,360 [INFO]   IB connected (clientId=45)
+2026-03-05 14:35:16,400 [INFO]   Subscribed 14 UHLAX strikes. Warming up 10s...
+2026-03-05 14:35:16,404 [INFO] Warning 2119, reqId -1: Market data farm is connecting:usopt.nj
+2026-03-05 14:35:16,906 [INFO] Warning 2119, reqId -1: Market data farm is connecting:usopt.nj
+2026-03-05 14:35:17,412 [INFO] Warning 2119, reqId -1: Market data farm is connecting:usopt.nj
+2026-03-05 14:35:17,782 [INFO] Warning 2104, reqId -1: Market data farm connection is OK:usopt.nj
+2026-03-05 14:35:26,402 [INFO] 
+       K   YES_ASK    NO_ASK       SUM       GAP
+2026-03-05 14:35:26,402 [INFO]   ──────────────────────────────────────────────────
+2026-03-05 14:35:26,402 [INFO]       63       n/a       n/a
+2026-03-05 14:35:26,402 [INFO]       64       n/a       n/a
+2026-03-05 14:35:26,402 [INFO]       65       n/a       n/a
+2026-03-05 14:35:26,403 [INFO]       66       n/a       n/a
+2026-03-05 14:35:26,403 [INFO]       67       n/a       n/a
+2026-03-05 14:35:26,403 [INFO]       68       n/a       n/a
+2026-03-05 14:35:26,403 [INFO]       69       n/a       n/a
+2026-03-05 14:35:26,403 [INFO]       70       n/a       n/a
+2026-03-05 14:35:26,403 [INFO]       71       n/a       n/a
+2026-03-05 14:35:26,403 [INFO]       72       n/a       n/a
+2026-03-05 14:35:26,403 [INFO]       73       n/a       n/a
+2026-03-05 14:35:26,403 [INFO]       74       n/a       n/a
+2026-03-05 14:35:26,403 [INFO]       75       n/a       n/a
+2026-03-05 14:35:26,404 [INFO]       76       n/a       n/a
+2026-03-05 14:35:26,404 [INFO] 
+2026-03-05 14:35:26,404 [INFO]   ✓ IB price feed active — 14 strikes subscribed
+2026-03-05 14:35:26,404 [INFO]   Fetching opening NWS forecast...
+2026-03-05 14:35:26,509 [INFO]   Opening NWS forecast high: 72.0°F
+2026-03-05 14:35:26,509 [INFO] 
+  Polling... (Ctrl+C to stop)
+
+2026-03-05 14:43:29,306 [INFO] 
+  Stopped by user.
+2026-03-05 14:43:29,307 [INFO] Disconnecting from 127.0.0.1:4001, 2.93 kB sent in 37 messages, 31.8 kB received in 641 messages, session time 493 s.
+2026-03-05 14:43:29,307 [INFO] Disconnecting
+2026-03-05 14:43:29,307 [INFO]   IB disconnected.
+2026-03-05 14:43:36,812 [INFO] Connecting to 127.0.0.1:4001 with clientId 45...
+2026-03-05 14:43:36,813 [INFO] Connected
+2026-03-05 14:43:36,815 [INFO] Logged on to server version 178
+2026-03-05 14:43:36,817 [INFO] Warning 2104, reqId -1: Market data farm connection is OK:usopt.nj
+2026-03-05 14:43:36,817 [INFO] Warning 2104, reqId -1: Market data farm connection is OK:usfarm
+2026-03-05 14:43:36,817 [INFO] Warning 2107, reqId -1: HMDS data farm connection is inactive but should be available upon demand.ushmds
+2026-03-05 14:43:36,817 [INFO] Warning 2158, reqId -1: Sec-def data farm connection is OK:secdefnj
+2026-03-05 14:43:36,817 [INFO] API connection ready
+2026-03-05 14:43:37,254 [INFO] Synchronization complete
+2026-03-05 14:43:37,255 [INFO]   IB connected (clientId=45)
+2026-03-05 14:43:37,297 [INFO]   Subscribed 14 UHLAX strikes. Warming up 20s...
+2026-03-05 14:43:57,299 [INFO] 
+       K   YES_ASK    NO_ASK       SUM       GAP
+2026-03-05 14:43:57,300 [INFO]   ──────────────────────────────────────────────────
+2026-03-05 14:44:01,817 [INFO]   ✓ IB price feed active — 14 strikes subscribed
+2026-03-05 14:44:01,817 [INFO]   Fetching opening NWS forecast...
+2026-03-05 14:44:02,024 [INFO]   Opening NWS forecast high: 72.0°F
+2026-03-05 14:44:02,024 [INFO] 
+  Polling... (Ctrl+C to stop)
+
+2026-03-05 14:46:21,746 [INFO] 
+  Stopped by user.
+2026-03-05 14:46:21,748 [INFO] Disconnecting from 127.0.0.1:4001, 2.93 kB sent in 37 messages, 31.6 kB received in 638 messages, session time 165 s.
+2026-03-05 14:46:21,748 [INFO] Disconnecting
+2026-03-05 14:46:21,748 [INFO]   IB disconnected.
+2026-03-05 14:46:24,342 [INFO] Connecting to 127.0.0.1:4001 with clientId 45...
+2026-03-05 14:46:24,343 [INFO] Connected
+2026-03-05 14:46:24,345 [INFO] Logged on to server version 178
+2026-03-05 14:46:24,346 [INFO] Warning 2104, reqId -1: Market data farm connection is OK:usopt.nj
+2026-03-05 14:46:24,347 [INFO] Warning 2104, reqId -1: Market data farm connection is OK:usfarm
+2026-03-05 14:46:24,347 [INFO] Warning 2107, reqId -1: HMDS data farm connection is inactive but should be available upon demand.ushmds
+2026-03-05 14:46:24,347 [INFO] Warning 2158, reqId -1: Sec-def data farm connection is OK:secdefnj
+2026-03-05 14:46:24,347 [INFO] API connection ready
+2026-03-05 14:46:24,785 [INFO] Synchronization complete
+2026-03-05 14:46:24,785 [INFO]   IB connected (clientId=45)
+2026-03-05 14:46:24,826 [INFO]   Subscribed 14 UHLAX strikes. Warming up 20s...
+2026-03-05 14:46:44,828 [INFO] 
+       K   YES_ASK    NO_ASK       SUM       GAP
+2026-03-05 14:46:44,829 [INFO]   ──────────────────────────────────────────────────
+2026-03-05 14:46:44,829 [INFO]       63       n/a       n/a
+2026-03-05 14:46:44,829 [INFO]       64       n/a       n/a
+2026-03-05 14:46:44,829 [INFO]       65       n/a       n/a
+2026-03-05 14:46:44,830 [INFO]       66       n/a       n/a
+2026-03-05 14:46:44,830 [INFO]       67       n/a       n/a
+2026-03-05 14:46:44,830 [INFO]       68       n/a       n/a
+2026-03-05 14:46:44,830 [INFO]       69       n/a       n/a
+2026-03-05 14:46:44,830 [INFO]       70       n/a       n/a
+2026-03-05 14:46:44,830 [INFO]       71       n/a       n/a
+2026-03-05 14:46:44,830 [INFO]       72       n/a       n/a
+2026-03-05 14:46:44,830 [INFO]       73       n/a       n/a
+2026-03-05 14:46:44,830 [INFO]       74       n/a       n/a
+2026-03-05 14:46:44,830 [INFO]       75       n/a       n/a
+2026-03-05 14:46:44,830 [INFO]       76       n/a       n/a
+2026-03-05 14:46:44,830 [INFO] 
+2026-03-05 14:46:49,344 [INFO]   ✓ IB price feed active — 14 strikes subscribed
+2026-03-05 14:46:49,344 [INFO]   Fetching opening NWS forecast...
+2026-03-05 14:46:49,447 [INFO]   Opening NWS forecast high: 72.0°F
+2026-03-05 14:46:49,447 [INFO] 
+  Polling... (Ctrl+C to stop)
+
+2026-03-05 14:53:50,117 [INFO] 
+  Stopped by user.
+2026-03-05 14:53:50,118 [INFO] Disconnecting from 127.0.0.1:4001, 2.93 kB sent in 37 messages, 32.0 kB received in 650 messages, session time 446 s.
+2026-03-05 14:53:50,118 [INFO] Disconnecting
+2026-03-05 14:53:50,119 [INFO]   IB disconnected.
+2026-03-05 14:53:53,992 [INFO] Connecting to 127.0.0.1:4001 with clientId 45...
+2026-03-05 14:53:53,993 [INFO] Connected
+2026-03-05 14:53:53,995 [INFO] Logged on to server version 178
+2026-03-05 14:53:53,996 [INFO] Warning 2104, reqId -1: Market data farm connection is OK:usopt.nj
+2026-03-05 14:53:53,996 [INFO] Warning 2104, reqId -1: Market data farm connection is OK:usfarm
+2026-03-05 14:53:53,996 [INFO] Warning 2107, reqId -1: HMDS data farm connection is inactive but should be available upon demand.ushmds
+2026-03-05 14:53:53,996 [INFO] Warning 2158, reqId -1: Sec-def data farm connection is OK:secdefnj
+2026-03-05 14:53:53,996 [INFO] API connection ready
+2026-03-05 14:53:54,333 [INFO] Synchronization complete
+2026-03-05 14:53:54,334 [INFO]   IB connected (clientId=45)
+2026-03-05 14:53:54,375 [INFO]   Subscribed 14 UHLAX strikes. Warming up 20s...
+2026-03-05 14:54:14,376 [INFO] 
+       K   YES_ASK    NO_ASK       SUM       GAP   Y_DEPTH   N_DEPTH
+2026-03-05 14:54:14,377 [INFO]   ──────────────────────────────────────────────────────────────────
+2026-03-05 14:54:14,377 [INFO]       63       n/a       n/a
+2026-03-05 14:54:14,378 [INFO]       64       n/a       n/a
+2026-03-05 14:54:14,378 [INFO]       65       n/a       n/a
+2026-03-05 14:54:14,379 [INFO]       66       n/a       n/a
+2026-03-05 14:54:14,379 [INFO]       67       n/a       n/a
+2026-03-05 14:54:14,379 [INFO]       68       n/a       n/a
+2026-03-05 14:54:14,379 [INFO]       69       n/a       n/a
+2026-03-05 14:54:14,379 [INFO]       70       n/a       n/a
+2026-03-05 14:54:14,380 [INFO]       71       n/a       n/a
+2026-03-05 14:54:14,380 [INFO]       72       n/a       n/a
+2026-03-05 14:54:14,380 [INFO]       73       n/a       n/a
+2026-03-05 14:54:14,380 [INFO]       74       n/a       n/a
+2026-03-05 14:54:14,380 [INFO]       75       n/a       n/a
+2026-03-05 14:54:14,380 [INFO]       76       n/a       n/a
+2026-03-05 14:54:14,380 [INFO] 
+2026-03-05 14:54:14,380 [INFO]   ✓ IB price feed active — 14 strikes
+2026-03-05 14:54:14,380 [INFO]   Fetching opening NWS forecast...
+2026-03-05 14:54:14,476 [INFO]   Opening NWS forecast high: 72.0°F
+2026-03-05 14:54:14,476 [INFO] 
+  Polling... (Ctrl+C to stop)
+
+2026-03-05 14:59:27,569 [INFO] Disconnecting from 127.0.0.1:4001, 2.93 kB sent in 37 messages, 31.8 kB received in 642 messages, session time 334 s.
+2026-03-05 14:59:27,569 [INFO] Disconnecting
+2026-03-05 14:59:27,569 [INFO]   IB disconnected.
+2026-03-05 14:59:27,570 [INFO] Disconnected.
