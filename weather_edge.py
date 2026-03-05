@@ -229,9 +229,10 @@ class IBPriceFeed:
     """
 
     def __init__(self):
-        self.ib        = None
-        self.pairs     = {}    # strike → (yes_ticker, no_ticker)
-        self.connected = False
+        self.ib            = None
+        self.pairs         = {}    # strike → (yes_ticker, no_ticker)
+        self.connected     = False
+        self.contract_date = ""    # YYYYMMDD of actively-trading contracts
 
     async def start(self) -> bool:
         try:
@@ -247,54 +248,79 @@ class IBPriceFeed:
             )
             log.info(f"  IB connected (clientId={IBKR_CLIENT_ID})")
 
-            today_str = datetime.now(ET).strftime("%Y%m%d")
-            c = Contract()
-            c.symbol   = "UHLAX"
-            c.secType  = "OPT"
-            c.exchange = "FORECASTX"
-            c.currency = "USD"
-            c.lastTradeDateOrContractMonth = today_str
+            # UHLAX contracts are daily — today's contracts may have stopped
+            # quoting if the temperature outcome is already determined.
+            # Try today first, then tomorrow, to find actively-trading contracts.
+            from datetime import timedelta
 
-            details = await self.ib.reqContractDetailsAsync(c)
-            if not details:
-                log.warning("  UHLAX: no contracts found for today")
-                return False
+            for day_offset in range(0, 3):
+                try_date = datetime.now(ET) + timedelta(days=day_offset)
+                try_str = try_date.strftime("%Y%m%d")
+                c = Contract()
+                c.symbol   = "UHLAX"
+                c.secType  = "OPT"
+                c.exchange = "FORECASTX"
+                c.currency = "USD"
+                c.lastTradeDateOrContractMonth = try_str
 
-            yes_map = {d.contract.strike: d.contract
-                       for d in details if d.contract.right == "C"}
-            no_map  = {d.contract.strike: d.contract
-                       for d in details if d.contract.right == "P"}
-            common  = sorted(set(yes_map) & set(no_map))
+                details = await self.ib.reqContractDetailsAsync(c)
+                if not details:
+                    log.info(f"  UHLAX: no contracts for {try_str}, trying next day...")
+                    continue
 
-            if not common:
-                log.warning("  UHLAX: no YES+NO pairs found")
-                return False
+                log.info(f"  UHLAX: found {len(details)} contracts for {try_str}")
 
-            for s in common:
-                yt = self.ib.reqMktData(yes_map[s], snapshot=False)
-                nt = self.ib.reqMktData(no_map[s],  snapshot=False)
-                self.pairs[s] = (yt, nt)
+                yes_map = {d.contract.strike: d.contract
+                           for d in details if d.contract.right == "C"}
+                no_map  = {d.contract.strike: d.contract
+                           for d in details if d.contract.right == "P"}
+                common  = sorted(set(yes_map) & set(no_map))
 
-            log.info(f"  Subscribed {len(common)} UHLAX strikes. "
-                     f"Warming up {IB_WARMUP_SEC}s...")
-            await asyncio.sleep(IB_WARMUP_SEC)
+                if not common:
+                    log.info(f"  UHLAX: no YES+NO pairs for {try_str}, trying next day...")
+                    continue
 
-            # Print initial price ladder
-            log.info(f"\n  {'K':>6}  {'YES_ASK':>8}  {'NO_ASK':>8}  "
-                     f"{'SUM':>8}  {'GAP':>8}  {'Y_DEPTH':>8}  {'N_DEPTH':>8}")
-            log.info(f"  {'─'*66}")
-            for s in common:
-                ya, na, yd, nd = self._read(s)
-                if ya > 0 and na > 0:
-                    log.info(f"  {s:>6.0f}  {ya:>8.4f}  {na:>8.4f}  "
-                             f"{ya+na:>8.4f}  {1-(ya+na):>+8.4f}  "
-                             f"{yd:>8}  {nd:>8}")
-                else:
-                    log.info(f"  {s:>6.0f}  {'n/a':>8}  {'n/a':>8}")
-            log.info("")
+                # Subscribe to market data
+                self.pairs = {}
+                for s in common:
+                    yt = self.ib.reqMktData(yes_map[s], snapshot=False)
+                    nt = self.ib.reqMktData(no_map[s],  snapshot=False)
+                    self.pairs[s] = (yt, nt)
 
-            self.connected = True
-            return True
+                log.info(f"  Subscribed {len(common)} UHLAX strikes (exp={try_str}). "
+                         f"Warming up {IB_WARMUP_SEC}s...")
+                await asyncio.sleep(IB_WARMUP_SEC)
+
+                # Print initial price ladder and count live strikes
+                log.info(f"\n  {'K':>6}  {'YES_ASK':>8}  {'NO_ASK':>8}  "
+                         f"{'SUM':>8}  {'GAP':>8}  {'Y_DEPTH':>8}  {'N_DEPTH':>8}")
+                log.info(f"  {'─'*66}")
+                live_count = 0
+                for s in common:
+                    ya, na, yd, nd = self._read(s)
+                    if ya > 0 and na > 0:
+                        live_count += 1
+                        log.info(f"  {s:>6.0f}  {ya:>8.4f}  {na:>8.4f}  "
+                                 f"{ya+na:>8.4f}  {1-(ya+na):>+8.4f}  "
+                                 f"{yd:>8}  {nd:>8}")
+                    else:
+                        log.info(f"  {s:>6.0f}  {'n/a':>8}  {'n/a':>8}")
+                log.info(f"\n  Live prices on {live_count}/{len(common)} strikes")
+
+                if live_count > 0:
+                    self.contract_date = try_str
+                    self.connected = True
+                    return True
+
+                # No live prices — cancel subscriptions and try next day
+                log.warning(f"  No live prices for {try_str} — trying next day...")
+                for yt, nt in self.pairs.values():
+                    self.ib.cancelMktData(yt)
+                    self.ib.cancelMktData(nt)
+                self.pairs = {}
+
+            log.warning("  UHLAX: no actively-trading contracts found in next 3 days")
+            return False
 
         except Exception as e:
             log.warning(f"  IB start failed: {e}")
