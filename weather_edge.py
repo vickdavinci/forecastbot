@@ -110,6 +110,33 @@ SOURCE_CSV    = os.path.join(LOG_DIR, "weather_sources_v4.csv")
 CROSSING_CSV  = os.path.join(LOG_DIR, "weather_crossings_v4.csv")
 
 
+# ─── COLORS ───────────────────────────────────────────────────────────────────
+
+class C:
+    """ANSI color codes for terminal output."""
+    RESET   = "\033[0m"
+    BOLD    = "\033[1m"
+    DIM     = "\033[2m"
+    # Foreground
+    RED     = "\033[91m"
+    GREEN   = "\033[92m"
+    YELLOW  = "\033[93m"
+    BLUE    = "\033[94m"
+    MAGENTA = "\033[95m"
+    CYAN    = "\033[96m"
+    WHITE   = "\033[97m"
+    GRAY    = "\033[90m"
+    # Combinations
+    HEADER  = "\033[96m"      # cyan — borders, headers
+    VALUE   = "\033[97m\033[1m"  # bold white — key values
+    LABEL   = "\033[90m"      # gray — labels
+    OK      = "\033[92m"      # green — confirmed
+    WARN    = "\033[93m"      # yellow — waiting, warnings
+    ALERT   = "\033[91m\033[1m"  # bold red — signals
+    EDGE    = "\033[95m"      # magenta — edge measurements
+    SETTLE  = "\033[92m\033[1m"  # bold green — settlement
+
+
 # ─── HELPERS ──────────────────────────────────────────────────────────────────
 
 def send_telegram(msg: str) -> None:
@@ -814,106 +841,150 @@ def print_source_status(day: DayState):
     """Print current readings from all three data sources."""
     now_str = datetime.now(PT).strftime("%H:%M:%S PT")
     is_golden = GOLDEN_START_HOUR <= datetime.now(PT).hour < GOLDEN_END_HOUR
-    mode = "☀ GOLDEN HOUR" if is_golden else "normal"
 
-    print(f"\n  ── {now_str}  [{mode}]  poll #{day.total_polls} {'─'*30}")
+    if is_golden:
+        mode_str = f"{C.YELLOW}☀ GOLDEN HOUR{C.RESET}"
+    else:
+        mode_str = f"{C.DIM}normal{C.RESET}"
 
-    # METAR — settlement source
+    # ── Poll header ──
+    print(f"\n  {C.HEADER}┌─────────────────────────────────────────────────────────────────┐{C.RESET}")
+    print(f"  {C.HEADER}│{C.RESET}  {C.VALUE}{now_str}{C.RESET}   {mode_str}   "
+          f"{C.DIM}poll #{day.total_polls}{C.RESET}"
+          f"  {C.HEADER}│{C.RESET}")
+    print(f"  {C.HEADER}└─────────────────────────────────────────────────────────────────┘{C.RESET}")
+
+    # ── Data sources table ──
+    print(f"\n  {C.BOLD}{C.WHITE}DATA SOURCES{C.RESET}")
+    print(f"  {C.HEADER}┌──────────┬───────────┬──────────┬──────────┬─────────────────┐{C.RESET}")
+    print(f"  {C.HEADER}│{C.RESET} {C.DIM}Source{C.RESET}   "
+          f"{C.HEADER}│{C.RESET} {C.DIM}Current{C.RESET}   "
+          f"{C.HEADER}│{C.RESET} {C.DIM}High{C.RESET}     "
+          f"{C.HEADER}│{C.RESET} {C.DIM}Obs Time{C.RESET} "
+          f"{C.HEADER}│{C.RESET} {C.DIM}Notes{C.RESET}           {C.HEADER}│{C.RESET}")
+    print(f"  {C.HEADER}├──────────┼───────────┼──────────┼──────────┼─────────────────┤{C.RESET}")
+
+    # METAR row
     if day.last_metar:
         m = day.last_metar
-        print(f"  METAR   {m.temp_f:.1f}°F  (rounded={m.temp_rounded}°F)"
-              f"  obs={m.obs_time_pt}  wind={m.wind_mph:.0f}mph"
-              f"  high={day.metar_high_rounded}°F")
+        print(f"  {C.HEADER}│{C.RESET} {C.CYAN}METAR{C.RESET}    "
+              f"{C.HEADER}│{C.RESET} {C.VALUE}{m.temp_f:>6.1f}°F{C.RESET}  "
+              f"{C.HEADER}│{C.RESET} {C.VALUE}{day.metar_high_rounded:>5}°F{C.RESET}  "
+              f"{C.HEADER}│{C.RESET} {m.obs_time_pt:<8} "
+              f"{C.HEADER}│{C.RESET} {C.DIM}wind={m.wind_mph:.0f}mph{C.RESET}       {C.HEADER}│{C.RESET}")
     else:
-        print(f"  METAR   no data")
+        print(f"  {C.HEADER}│{C.RESET} {C.CYAN}METAR{C.RESET}    "
+              f"{C.HEADER}│{C.RESET} {C.DIM}  no data{C.RESET}  "
+              f"{C.HEADER}│{C.RESET} {C.DIM}     —{C.RESET}   "
+              f"{C.HEADER}│{C.RESET} {C.DIM}—{C.RESET}        "
+              f"{C.HEADER}│{C.RESET}                 {C.HEADER}│{C.RESET}")
 
-    # WU — confirmation / settlement value
+    # WU row
     if day.last_wu:
         w = day.last_wu
         wu_age = int(time.time() - day.wu_last_update_wallclock) if day.wu_last_update_wallclock > 0 else 0
-        print(f"  WU      {w.temp_f}°F   high={day.wu_high_f}°F ◀ SETTLEMENT"
-              f"  obs={w.obs_time}  age={wu_age}s  updates={day.wu_update_count}")
+        print(f"  {C.HEADER}│{C.RESET} {C.SETTLE}WU{C.RESET}       "
+              f"{C.HEADER}│{C.RESET} {C.VALUE}{w.temp_f:>6}°F{C.RESET}  "
+              f"{C.HEADER}│{C.RESET} {C.SETTLE}{day.wu_high_f:>5}°F{C.RESET} ◀"
+              f"{C.HEADER}│{C.RESET} {w.obs_time:<8} "
+              f"{C.HEADER}│{C.RESET} {C.DIM}age={wu_age}s upd={day.wu_update_count}{C.RESET}  {C.HEADER}│{C.RESET}")
     else:
-        print(f"  WU      no data")
+        print(f"  {C.HEADER}│{C.RESET} {C.SETTLE}WU{C.RESET}       "
+              f"{C.HEADER}│{C.RESET} {C.DIM}  no data{C.RESET}  "
+              f"{C.HEADER}│{C.RESET} {C.DIM}     —{C.RESET}   "
+              f"{C.HEADER}│{C.RESET} {C.DIM}—{C.RESET}        "
+              f"{C.HEADER}│{C.RESET}                 {C.HEADER}│{C.RESET}")
 
-    # PWS — leading indicator
+    # PWS row
     if day.last_pws:
         p = day.last_pws
-        print(f"  PWS     {p.temp_f:.1f}°F  (reads 2–5°F high)"
-              f"  obs={p.obs_time}  high={day.pws_high_f:.1f}°F")
+        print(f"  {C.HEADER}│{C.RESET} {C.YELLOW}PWS{C.RESET}      "
+              f"{C.HEADER}│{C.RESET} {C.VALUE}{p.temp_f:>6.1f}°F{C.RESET}  "
+              f"{C.HEADER}│{C.RESET} {C.VALUE}{day.pws_high_f:>5.0f}°F{C.RESET}  "
+              f"{C.HEADER}│{C.RESET} {p.obs_time:<8} "
+              f"{C.HEADER}│{C.RESET} {C.DIM}reads 2-5°F hi{C.RESET}  {C.HEADER}│{C.RESET}")
     else:
-        print(f"  PWS     no data")
+        print(f"  {C.HEADER}│{C.RESET} {C.YELLOW}PWS{C.RESET}      "
+              f"{C.HEADER}│{C.RESET} {C.DIM}  no data{C.RESET}  "
+              f"{C.HEADER}│{C.RESET} {C.DIM}     —{C.RESET}   "
+              f"{C.HEADER}│{C.RESET} {C.DIM}—{C.RESET}        "
+              f"{C.HEADER}│{C.RESET}                 {C.HEADER}│{C.RESET}")
 
-    # Source drift
+    print(f"  {C.HEADER}└──────────┴───────────┴──────────┴──────────┴─────────────────┘{C.RESET}")
+
+    # ── Drift ──
     drifts = []
     if day.last_metar and day.last_wu:
-        drifts.append(f"METAR−WU={day.last_metar_wu_drift:+.1f}°F")
+        d = day.last_metar_wu_drift
+        clr = C.GREEN if abs(d) <= 1 else C.YELLOW if abs(d) <= 3 else C.RED
+        drifts.append(f"METAR−WU = {clr}{d:+.1f}°F{C.RESET}")
     if day.last_pws and day.last_wu:
-        drifts.append(f"PWS−WU={day.last_pws_wu_drift:+.1f}°F")
+        d = day.last_pws_wu_drift
+        clr = C.GREEN if abs(d) <= 2 else C.YELLOW if abs(d) <= 5 else C.RED
+        drifts.append(f"PWS−WU = {clr}{d:+.1f}°F{C.RESET}")
     if day.last_pws and day.last_metar:
-        drifts.append(f"PWS−METAR={day.last_pws_metar_drift:+.1f}°F")
+        d = day.last_pws_metar_drift
+        clr = C.GREEN if abs(d) <= 2 else C.YELLOW if abs(d) <= 5 else C.RED
+        drifts.append(f"PWS−METAR = {clr}{d:+.1f}°F{C.RESET}")
     if drifts:
-        print(f"  Drift   {', '.join(drifts)}")
-
-    # Source highs
-    sources = []
-    if day.metar_high_rounded > 0:
-        sources.append(f"METAR={day.metar_high_rounded}°F")
-    if day.wu_high_f > 0:
-        sources.append(f"WU={day.wu_high_f}°F")
-    if day.pws_high_f > 0:
-        sources.append(f"PWS={day.pws_high_f:.0f}°F")
-    if sources:
-        high_drift = ""
+        print(f"\n  {C.BOLD}{C.WHITE}DRIFT{C.RESET}")
+        print(f"    {'    '.join(drifts)}")
         if day.metar_high_rounded > 0 and day.wu_high_f > 0:
             hd = day.metar_high_rounded - day.wu_high_f
-            high_drift = f"  (METAR−WU high drift={hd:+d}°F)"
-        print(f"  Highs   {', '.join(sources)}{high_drift}")
+            clr = C.GREEN if hd == 0 else C.YELLOW if abs(hd) <= 2 else C.RED
+            print(f"    High drift (METAR−WU) = {clr}{hd:+d}°F{C.RESET}")
 
-    # Edge timeline
+    # ── Edge timeline ──
     active_crossings = {k: v for k, v in day.crossings.items()
                         if v.metar_crossed_at or v.wu_crossed_at}
     if active_crossings:
-        print(f"\n  {'─'*60}")
-        print(f"  Edge Timeline  (METAR → WU → Market)")
-        print(f"  {'─'*60}")
+        print(f"\n  {C.BOLD}{C.EDGE}EDGE TIMELINE{C.RESET}  {C.DIM}(METAR → WU → Market){C.RESET}")
+        print(f"  {C.EDGE}╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌{C.RESET}")
         for strike in sorted(active_crossings.keys()):
             cx = active_crossings[strike]
             parts = []
             if cx.metar_crossed_at:
-                parts.append(f"METAR={datetime.fromtimestamp(cx.metar_crossed_at, tz=PT).strftime('%H:%M')}")
+                parts.append(f"{C.CYAN}METAR={datetime.fromtimestamp(cx.metar_crossed_at, tz=PT).strftime('%H:%M')}{C.RESET}")
             if cx.wu_crossed_at:
-                parts.append(f"WU={datetime.fromtimestamp(cx.wu_crossed_at, tz=PT).strftime('%H:%M')}")
+                parts.append(f"{C.GREEN}WU={datetime.fromtimestamp(cx.wu_crossed_at, tz=PT).strftime('%H:%M')}{C.RESET}")
             else:
-                parts.append("WU=waiting…")
+                parts.append(f"{C.WARN}WU=waiting…{C.RESET}")
             if cx.market_repriced_at:
-                parts.append(f"MKT={datetime.fromtimestamp(cx.market_repriced_at, tz=PT).strftime('%H:%M')}")
+                parts.append(f"{C.GREEN}MKT={datetime.fromtimestamp(cx.market_repriced_at, tz=PT).strftime('%H:%M')}{C.RESET}")
             elif cx.wu_crossed_at:
-                parts.append("MKT=waiting…")
+                parts.append(f"{C.WARN}MKT=waiting…{C.RESET}")
 
             lags = []
             if cx.pws_early_warning() is not None:
-                lags.append(f"PWS warned {cx.pws_early_warning():.0f}m early")
+                lags.append(f"{C.YELLOW}PWS warned {cx.pws_early_warning():.0f}m early{C.RESET}")
             if cx.metar_to_wu_lag() is not None:
-                lags.append(f"METAR→WU={cx.metar_to_wu_lag():.1f}m")
+                lags.append(f"METAR→WU = {C.EDGE}{cx.metar_to_wu_lag():.1f}m{C.RESET}")
             if cx.wu_to_market_lag() is not None:
-                lags.append(f"WU→MKT={cx.wu_to_market_lag():.1f}m")
+                lags.append(f"WU→MKT = {C.EDGE}{cx.wu_to_market_lag():.1f}m{C.RESET}")
             if cx.edge_window() is not None:
-                lags.append(f"EDGE={cx.edge_window():.1f}m")
+                lags.append(f"EDGE = {C.BOLD}{C.EDGE}{cx.edge_window():.1f}m{C.RESET}")
 
-            lag_str = f"  [{', '.join(lags)}]" if lags else ""
-            print(f"    K{strike:.0f}  {' → '.join(parts)}{lag_str}")
+            print(f"    {C.VALUE}K{strike:.0f}{C.RESET}   {' → '.join(parts)}")
+            if lags:
+                print(f"          [{' │ '.join(lags)}]")
 
 
 def print_market_prices(prices: dict, day: DayState):
     """Print current market prices for all strikes."""
     if not prices:
-        print(f"\n  [IB prices not available — data collection mode]")
+        print(f"\n  {C.DIM}[IB prices not available — data collection mode]{C.RESET}")
         return
 
-    print(f"\n  {'K':>6}  {'YES':>7}  {'NO':>7}  {'SUM':>7}  "
-          f"{'YD':>5}  {'ND':>5}  {'METAR':>6}  {'WU':>4}  STATUS")
-    print(f"  {'─'*70}")
+    print(f"\n  {C.BOLD}{C.WHITE}MARKET PRICES{C.RESET}")
+    print(f"  {C.HEADER}┌────────┬─────────┬─────────┬─────────┬───────┬───────┬────────────────┐{C.RESET}")
+    print(f"  {C.HEADER}│{C.RESET} {C.DIM}Strike{C.RESET} "
+          f"{C.HEADER}│{C.RESET} {C.DIM}  YES{C.RESET}    "
+          f"{C.HEADER}│{C.RESET} {C.DIM}  NO{C.RESET}     "
+          f"{C.HEADER}│{C.RESET} {C.DIM}  SUM{C.RESET}    "
+          f"{C.HEADER}│{C.RESET} {C.DIM}  YD{C.RESET}   "
+          f"{C.HEADER}│{C.RESET} {C.DIM}  ND{C.RESET}   "
+          f"{C.HEADER}│{C.RESET} {C.DIM}Status{C.RESET}          {C.HEADER}│{C.RESET}")
+    print(f"  {C.HEADER}├────────┼─────────┼─────────┼─────────┼───────┼───────┼────────────────┤{C.RESET}")
 
     for strike in sorted(prices.keys()):
         ya, na, yd, nd = prices[strike]
@@ -923,45 +994,73 @@ def print_market_prices(prices: dict, day: DayState):
         wu_exceeds = day.wu_settled_exceeds(strike)
 
         if wu_exceeds:
-            status = "✓ WU CONFIRMED"
+            status = f"{C.OK}✓ WU CONFIRMED{C.RESET}"
+            status_pad = 14
         elif metar_exceeds:
-            status = "⚡ METAR > strike"
+            status = f"{C.YELLOW}⚡ METAR > K{C.RESET}"
+            status_pad = 12
         elif wu_exceeds is False and metar_exceeds is False:
-            status = "  below"
+            status = f"{C.DIM}  below{C.RESET}"
+            status_pad = 7
         else:
             status = ""
+            status_pad = 0
 
-        metar_str = f"{day.metar_high_rounded}" if day.metar_high_rounded > 0 else "?"
-        wu_str = f"{day.wu_high_f}" if day.wu_high_f > 0 else "?"
+        # Color the sum based on parity
+        sum_clr = C.GREEN if s < 0.95 else C.YELLOW if s < 1.0 else C.RED
 
-        print(f"  {strike:>6.0f}  ${ya:>5.2f}  ${na:>5.2f}  ${s:>5.2f}  "
-              f"{yd:>5}  {nd:>5}  {metar_str:>6}  {wu_str:>4}  {status}")
+        # Pad status to fill table cell (16 chars visible)
+        pad = " " * max(0, 14 - status_pad)
+
+        print(f"  {C.HEADER}│{C.RESET} {C.VALUE}K{strike:<5.0f}{C.RESET} "
+              f"{C.HEADER}│{C.RESET} {C.WHITE}${ya:>5.2f}{C.RESET}   "
+              f"{C.HEADER}│{C.RESET} {C.WHITE}${na:>5.2f}{C.RESET}   "
+              f"{C.HEADER}│{C.RESET} {sum_clr}${s:>5.2f}{C.RESET}   "
+              f"{C.HEADER}│{C.RESET} {yd:>5} "
+              f"{C.HEADER}│{C.RESET} {nd:>5} "
+              f"{C.HEADER}│{C.RESET} {status}{pad} {C.HEADER}│{C.RESET}")
+
+    print(f"  {C.HEADER}└────────┴─────────┴─────────┴─────────┴───────┴───────┴────────────────┘{C.RESET}")
 
 
 def print_signal(sig: Signal, day: DayState):
     """Print and send alert for a detected signal."""
     now_str = datetime.now(PT).strftime("%H:%M:%S PT")
     icon = "📉" if sig.direction == "BUY_NO" else "📈"
+    dir_clr = C.RED if sig.direction == "BUY_NO" else C.GREEN
 
     if sig.direction == "BUY_YES":
         action = f"BUY YES @ ${sig.yes_ask:.2f} — pays $1.00 if temp > {sig.strike:.0f}°F"
     else:
         action = f"BUY NO  @ ${sig.no_ask:.2f} — pays $1.00 if temp ≤ {sig.strike:.0f}°F"
 
-    print(f"\n  {'━'*60}")
-    print(f"  {icon} {sig.direction}  K{sig.strike:.0f}  [{sig.reason}]")
-    print(f"  {'━'*60}")
-    print(f"  Edge score:       {sig.edge_score:+.4f}")
-    print(f"  YES ask:          ${sig.yes_ask:.2f}  ({sig.yes_ask*100:.0f}%)")
-    print(f"  NO ask:           ${sig.no_ask:.2f}")
-    print(f"  Depth YES/NO:     {sig.yes_depth} / {sig.no_depth}")
-    print(f"  METAR temp:       {sig.metar_temp:.1f}°F")
-    print(f"  WU high:          {sig.wu_high}°F")
-    print(f"  PWS temp:         {sig.pws_temp:.1f}°F")
-    print(f"  Profit/contract:  ${sig.profit_per_contract:.4f}")
-    print(f"  Action:           {action}")
-    print(f"  Time:             {now_str}")
-    print(f"  {'━'*60}\n")
+    # Extract short reason (after the colon)
+    short_reason = sig.reason.split(":")[0] if ":" in sig.reason else sig.reason
+
+    print(f"\n  {C.ALERT}┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓{C.RESET}")
+    print(f"  {C.ALERT}┃{C.RESET}  {icon} {dir_clr}{C.BOLD}{sig.direction}{C.RESET}"
+          f"   {C.VALUE}K{sig.strike:.0f}{C.RESET}"
+          f"   {C.DIM}{short_reason}{C.RESET}"
+          f"  {C.ALERT}┃{C.RESET}")
+    print(f"  {C.ALERT}┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛{C.RESET}")
+
+    print(f"\n    {C.DIM}Reason:{C.RESET}           {sig.reason}")
+    print(f"    {C.DIM}Edge score:{C.RESET}       {C.EDGE}{C.BOLD}{sig.edge_score:+.4f}{C.RESET}")
+    print()
+    print(f"    {C.DIM}YES ask:{C.RESET}          {C.VALUE}${sig.yes_ask:.2f}{C.RESET}"
+          f"  {C.DIM}({sig.yes_ask*100:.0f}%){C.RESET}")
+    print(f"    {C.DIM}NO ask:{C.RESET}           {C.VALUE}${sig.no_ask:.2f}{C.RESET}")
+    print(f"    {C.DIM}Depth YES/NO:{C.RESET}     {sig.yes_depth} / {sig.no_depth}")
+    print()
+    print(f"    {C.DIM}METAR temp:{C.RESET}       {C.CYAN}{sig.metar_temp:.1f}°F{C.RESET}")
+    print(f"    {C.DIM}WU high:{C.RESET}          {C.SETTLE}{sig.wu_high}°F{C.RESET}")
+    print(f"    {C.DIM}PWS temp:{C.RESET}         {C.YELLOW}{sig.pws_temp:.1f}°F{C.RESET}")
+    print()
+    print(f"    {C.DIM}Profit/contract:{C.RESET}  {C.GREEN}{C.BOLD}${sig.profit_per_contract:.4f}{C.RESET}")
+    print(f"    {C.DIM}Action:{C.RESET}           {dir_clr}{action}{C.RESET}")
+    print()
+    print(f"    {C.DIM}Time:{C.RESET}             {now_str}")
+    print()
 
     send_telegram(
         f"{icon} *{sig.direction} — K{sig.strike:.0f}*\n"
@@ -979,17 +1078,25 @@ def print_signal(sig: Signal, day: DayState):
 # ─── MAIN (fully async) ──────────────────────────────────────────────────────
 
 async def main():
-    print("\n" + "═" * 65)
-    print("  ForecastBot — Weather Edge Scanner v4.0")
-    print(f"  Started: {datetime.now(PT).strftime('%Y-%m-%d %H:%M:%S PT')}")
-    print(f"  Station: KLAX  |  Contract: UHLAX")
-    print(f"  Sources: METAR({METAR_STATION}) + WU + PWS({PWS_STATION_ID})")
-    print(f"  Golden hour: {GOLDEN_START_HOUR}:00–{GOLDEN_END_HOUR}:00 PT")
-    print(f"  Poll: {POLL_GOLDEN_SEC}s (golden) / {POLL_NORMAL_SEC}s (normal)"
-          f" / {POLL_SIGNAL_SEC}s (signal)")
-    print(f"  Edge threshold: ±{EDGE_ALERT_SCORE:.0%}")
-    print("  *** OBSERVATION ONLY — NO ORDERS ***")
-    print("═" * 65 + "\n")
+    W = 65
+    print(f"\n  {C.HEADER}╔{'═'*W}╗{C.RESET}")
+    print(f"  {C.HEADER}║{C.RESET}  {C.BOLD}{C.WHITE}ForecastBot — Weather Edge Scanner v4.0{C.RESET}"
+          + " " * (W - 40) + f"{C.HEADER}║{C.RESET}")
+    print(f"  {C.HEADER}║{C.RESET}  {C.DIM}Started: {datetime.now(PT).strftime('%Y-%m-%d %H:%M:%S PT')}{C.RESET}"
+          + " " * (W - 39) + f"{C.HEADER}║{C.RESET}")
+    print(f"  {C.HEADER}║{C.RESET}  Station: {C.CYAN}KLAX{C.RESET}  │  Contract: {C.CYAN}UHLAX{C.RESET}"
+          + " " * (W - 38) + f"{C.HEADER}║{C.RESET}")
+    print(f"  {C.HEADER}║{C.RESET}  Sources: {C.CYAN}METAR{C.RESET} + {C.GREEN}WU{C.RESET} + {C.YELLOW}PWS({PWS_STATION_ID}){C.RESET}"
+          + " " * (W - 41) + f"{C.HEADER}║{C.RESET}")
+    print(f"  {C.HEADER}║{C.RESET}  Golden Hour: {C.YELLOW}{GOLDEN_START_HOUR}:00–{GOLDEN_END_HOUR}:00 PT{C.RESET}"
+          + " " * (W - 33) + f"{C.HEADER}║{C.RESET}")
+    print(f"  {C.HEADER}║{C.RESET}  Poll: {POLL_GOLDEN_SEC}s {C.YELLOW}golden{C.RESET}"
+          f" │ {POLL_NORMAL_SEC}s {C.DIM}normal{C.RESET}"
+          f" │ {POLL_SIGNAL_SEC}s {C.RED}signal{C.RESET}"
+          + " " * (W - 47) + f"{C.HEADER}║{C.RESET}")
+    print(f"  {C.HEADER}║{C.RESET}  {C.RED}{C.BOLD}*** OBSERVATION ONLY — NO ORDERS ***{C.RESET}"
+          + " " * (W - 38) + f"{C.HEADER}║{C.RESET}")
+    print(f"  {C.HEADER}╚{'═'*W}╝{C.RESET}\n")
 
     init_logs()
     loop = asyncio.get_event_loop()
@@ -1184,7 +1291,8 @@ async def main():
                 interval = POLL_NORMAL_SEC
                 mode_str = "normal"
 
-            print(f"\n  Next poll in {interval}s ({mode_str})")
+            mode_clr = C.RED if mode_str == "signal" else C.YELLOW if mode_str == "golden" else C.DIM
+            print(f"\n  {C.DIM}Next poll in{C.RESET} {mode_clr}{interval}s ({mode_str}){C.RESET}")
 
     except KeyboardInterrupt:
         log.info("\n  Stopped by user.")
@@ -1195,46 +1303,64 @@ async def main():
         write_crossings(day)
         ib_feed.stop()
 
-        print("\n" + "═" * 65)
-        print("  SESSION SUMMARY")
-        print("═" * 65)
-        print(f"  Date:             {day.date_pt}")
-        print(f"  METAR high:       {day.metar_high_rounded}°F (raw={day.metar_high_f:.1f}°F)")
-        print(f"  WU high:          {day.wu_high_f}°F (SETTLEMENT)")
-        print(f"  PWS high:         {day.pws_high_f:.1f}°F")
-        print(f"  WU updates:       {day.wu_update_count}")
-        print(f"  Signals fired:    {day.signals_fired}")
-        print(f"  Total polls:      {day.total_polls}")
+        W = 65
+        print(f"\n  {C.HEADER}╔{'═'*W}╗{C.RESET}")
+        print(f"  {C.HEADER}║{C.RESET}  {C.BOLD}{C.WHITE}SESSION SUMMARY{C.RESET}"
+              + " " * (W - 17) + f"{C.HEADER}║{C.RESET}")
+        print(f"  {C.HEADER}╠{'═'*W}╣{C.RESET}")
+        print(f"  {C.HEADER}║{C.RESET}  {C.DIM}Date:{C.RESET}             {day.date_pt}"
+              + " " * (W - 29) + f"{C.HEADER}║{C.RESET}")
+        print(f"  {C.HEADER}║{C.RESET}  {C.DIM}METAR high:{C.RESET}       "
+              f"{C.CYAN}{day.metar_high_rounded}°F{C.RESET}"
+              f"  {C.DIM}(raw = {day.metar_high_f:.1f}°F){C.RESET}"
+              + " " * (W - 42) + f"{C.HEADER}║{C.RESET}")
+        print(f"  {C.HEADER}║{C.RESET}  {C.DIM}WU high:{C.RESET}          "
+              f"{C.SETTLE}{day.wu_high_f}°F{C.RESET}  ◀ SETTLEMENT"
+              + " " * (W - 39) + f"{C.HEADER}║{C.RESET}")
+        print(f"  {C.HEADER}║{C.RESET}  {C.DIM}PWS high:{C.RESET}         "
+              f"{C.YELLOW}{day.pws_high_f:.1f}°F{C.RESET}"
+              + " " * (W - 29) + f"{C.HEADER}║{C.RESET}")
+        print(f"  {C.HEADER}║{C.RESET}  {C.DIM}WU updates:{C.RESET}       {day.wu_update_count}"
+              + " " * (W - 23 - len(str(day.wu_update_count))) + f"{C.HEADER}║{C.RESET}")
+        print(f"  {C.HEADER}║{C.RESET}  {C.DIM}Signals fired:{C.RESET}    {day.signals_fired}"
+              + " " * (W - 23 - len(str(day.signals_fired))) + f"{C.HEADER}║{C.RESET}")
+        print(f"  {C.HEADER}║{C.RESET}  {C.DIM}Total polls:{C.RESET}      {day.total_polls}"
+              + " " * (W - 23 - len(str(day.total_polls))) + f"{C.HEADER}║{C.RESET}")
 
-        # Print crossing timeline summary
+        # Crossing measurements
         active_cx = {k: v for k, v in day.crossings.items()
                      if v.metar_crossed_at or v.wu_crossed_at}
         if active_cx:
-            print(f"\n  {'─'*50}")
-            print(f"  EDGE WINDOW MEASUREMENTS")
-            print(f"  (METAR crosses = edge starts, market reprices = edge closes)")
-            print(f"  {'─'*50}")
+            print(f"  {C.HEADER}╠{'═'*W}╣{C.RESET}")
+            print(f"  {C.HEADER}║{C.RESET}  {C.BOLD}{C.EDGE}EDGE WINDOW MEASUREMENTS{C.RESET}"
+                  + " " * (W - 26) + f"{C.HEADER}║{C.RESET}")
             for strike in sorted(active_cx.keys()):
                 cx = active_cx[strike]
                 parts = []
                 if cx.pws_early_warning() is not None:
                     parts.append(f"PWS warned {cx.pws_early_warning():.0f}m early")
                 if cx.metar_to_wu_lag() is not None:
-                    parts.append(f"METAR→WU={cx.metar_to_wu_lag():.1f}m")
+                    parts.append(f"METAR→WU = {cx.metar_to_wu_lag():.1f}m")
                 if cx.wu_to_market_lag() is not None:
-                    parts.append(f"WU→MKT={cx.wu_to_market_lag():.1f}m")
+                    parts.append(f"WU→MKT = {cx.wu_to_market_lag():.1f}m")
                 if cx.edge_window() is not None:
-                    parts.append(f"EDGE={cx.edge_window():.1f}m")
-                if parts:
-                    print(f"    K{strike:.0f}: {', '.join(parts)}")
-                else:
-                    print(f"    K{strike:.0f}: METAR crossed, waiting for WU/market")
+                    parts.append(f"EDGE = {cx.edge_window():.1f}m")
+                detail = ' │ '.join(parts) if parts else "METAR crossed, waiting…"
+                line = f"  K{strike:.0f}:  {detail}"
+                pad = max(0, W - len(line) - 1)
+                print(f"  {C.HEADER}║{C.RESET}{line}" + " " * pad + f"{C.HEADER}║{C.RESET}")
 
-        print(f"\n  Data files:")
-        print(f"    Sources:    {SOURCE_CSV}")
-        print(f"    Market:     {TICKS_CSV}")
-        print(f"    Signals:    {SIGNAL_CSV}")
-        print(f"    Crossings:  {CROSSING_CSV}\n")
+        # Data files
+        print(f"  {C.HEADER}╠{'═'*W}╣{C.RESET}")
+        print(f"  {C.HEADER}║{C.RESET}  {C.DIM}Sources:    {SOURCE_CSV}{C.RESET}"
+              + " " * max(0, W - 15 - len(SOURCE_CSV)) + f"{C.HEADER}║{C.RESET}")
+        print(f"  {C.HEADER}║{C.RESET}  {C.DIM}Market:     {TICKS_CSV}{C.RESET}"
+              + " " * max(0, W - 15 - len(TICKS_CSV)) + f"{C.HEADER}║{C.RESET}")
+        print(f"  {C.HEADER}║{C.RESET}  {C.DIM}Signals:    {SIGNAL_CSV}{C.RESET}"
+              + " " * max(0, W - 15 - len(SIGNAL_CSV)) + f"{C.HEADER}║{C.RESET}")
+        print(f"  {C.HEADER}║{C.RESET}  {C.DIM}Crossings:  {CROSSING_CSV}{C.RESET}"
+              + " " * max(0, W - 15 - len(CROSSING_CSV)) + f"{C.HEADER}║{C.RESET}")
+        print(f"  {C.HEADER}╚{'═'*W}╝{C.RESET}\n")
 
 
 if __name__ == "__main__":
