@@ -6,26 +6,34 @@
 
 ---
 
-## ACTIVE TASK — WEATHER_EDGE.PY IB PRICE FEED VERIFICATION
+## ACTIVE TASK — RUN WEATHER_EDGE.PY V4.0 FOR DATA COLLECTION
 
 ```
-TASK: Verify weather_edge.py v3.0 receives live IB prices for UHLAX strikes
-BLOCKER: 14 strikes subscribe but all show n/a prices
-STATUS: NEEDS TESTING — v3.0 async architecture should fix it
+TASK: Run weather_edge.py v4.0 for 1+ full trading day to collect multi-source data
+STATUS: READY TO RUN — all data sources validated
+NEXT: Analyze signals_v4.csv and sources_v4.csv after first full day
 
 DO NOT MODIFY kill_shot.py — it is stable and running.
 ```
 
-### Known Blocker
-IB `ib_async` requires its event loop to run continuously for tick callbacks.
-Previous versions (v1/v2) used threading or blocking `run_until_complete()`
-which stopped the loop after connect, preventing tick callbacks from firing.
-v3.0 uses full async architecture — needs live test to confirm fix.
+### What v4.0 Does
+Three data sources polled in parallel, compared against IB market prices:
+- **METAR** (aviationweather.gov) — hourly, matches WU settlement 93% of the time
+- **WU Current** (api.weather.com) — ~10 min updates, IS the settlement value
+- **PWS KCAELSEG23** (api.weather.com) — 5 min, leading indicator (reads 2-5F high)
 
-### Debug Steps If n/a Persists
-```python
-# Try different reqMktData parameters:
-yt = self.ib.reqMktData(contract, genericTickList="", snapshot=False)
+### Key Findings (March 5, 2026)
+- WU settlement = METAR ASOS rounded to integer F (93% match over 30 days)
+- PWS stations read 2-5F higher — NOT the settlement source
+- Daily peak heating: 12:00-14:30 PT (83% of days, from 30 days KCAELSEG23 data)
+- Edge window: ~10-13 min between METAR update and IBKR market repricing
+- "Exceed X" = strictly > X. WU high of exactly 75F does NOT pay K75 YES
+
+### Data Files
+```
+data/weather_sources_v4.csv   — METAR/WU/PWS readings every poll
+data/weather_ticks_v4.csv     — IB market prices per strike per poll
+data/weather_signals_v4.csv   — every signal fired with reason + edge score
 ```
 
 ---
@@ -48,13 +56,13 @@ yt = self.ib.reqMktData(contract, genericTickList="", snapshot=False)
 - Located at: `kill_shot.py` (root directory)
 - IB Gateway: 127.0.0.1:4001, clientId from .env
 
-### weather_edge.py v3.0 — WRITTEN, NEEDS TESTING
-- Directional edge scanner for UHLAX (LA daily temperature) contracts
-- NWS API: actual observations from KLAX station every 5 min
-- Santa Ana wind filter: suppresses NWS signal when wind > 25mph offshore
-- Bidirectional: BUY_YES and BUY_NO with separate 30-min cooldowns
-- Depth filter: skips strikes with YES or NO depth < 50 contracts
-- Full async architecture: single event loop, no threading
+### weather_edge.py v4.0 — READY TO RUN
+- Dual-source weather edge scanner for UHLAX (LA daily temperature) contracts
+- Three data sources: METAR (settlement), WU Current (confirmation), PWS (leading indicator)
+- Four signal types: METAR_CONFIRM, WU_CONFIRM, POST_PEAK, PWS_LEADING
+- Golden hour awareness: 60s polling 12-15 PT, 300s outside, 30s after signal
+- IB multi-day contract discovery (today/tomorrow/day-after)
+- Settlement semantics validated: "exceed X" = strictly > X, WU rounds to integer
 - Located at: `weather_edge.py` (root directory)
 - IB Gateway: 127.0.0.1:4001, clientId=45
 
@@ -162,6 +170,10 @@ python3 weather_edge.py         # Weather edge scanner (runs alongside, separate
 | Mar 5, 2026 | kill_shot.py v2.0 streaming | Event-driven tick-by-tick replaces timer polling |
 | Mar 5, 2026 | weather_edge.py v3.0 async | Full async fixes IB event loop blocking issue |
 | Mar 5, 2026 | UHLAX added to universe | Weather contracts offer directional edge via NWS divergence |
+| Mar 5, 2026 | WU settlement = METAR ASOS | Validated 93% match over 30 days (UTC/PT offset accounts for rest) |
+| Mar 5, 2026 | PWS not settlement source | KCAELSEG23 reads 2-5F higher than WU published high |
+| Mar 5, 2026 | Golden hour 12:00-14:30 PT | 83% of daily peaks occur in this window (30 days KCAELSEG23 data) |
+| Mar 5, 2026 | weather_edge.py v4.0 | Dual-source architecture: METAR + WU + PWS replaces NWS-only |
 
 ---
 

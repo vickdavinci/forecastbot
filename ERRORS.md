@@ -16,16 +16,31 @@
 
 ---
 
-## weather_edge.py — Known Issues
+## weather_edge.py v4.0 — Known Issues
 
 | Error | Cause | Fix |
 |-------|-------|-----|
-| All 14 UHLAX strikes show `n/a` prices after warmup | IB event loop was blocked (threading in v1/v2). v3.0 fixes with full async | Verify running v3.0: check for `async def main()` and `asyncio.run(main())` |
-| `n/a` persists in v3.0 | `reqMktData` may need different params for FORECASTX | Try: `yt = self.ib.reqMktData(contract, genericTickList="", snapshot=False)` |
-| NWS API returns stale observation | NWS updates every ~10 min, sometimes delayed | Check `observation.timestamp` vs current time. If > 30 min stale, log warning |
-| Santa Ana filter false positive | Wind > 25mph but not from offshore direction | Verify wind direction is N/NNW/NNE/NE/ENE before suppressing NWS signal |
+| All UHLAX strikes show `n/a` prices | Subscribing to settled contracts (today's contracts = yesterday's weather, already settled) | v4.0 tries today/tomorrow/day-after automatically. Verify `contract_date` in startup log |
+| METAR obs_time shows epoch | aviationweather.gov returns `obsTime` as epoch seconds, not ISO | v4.0 handles this — converts epoch to PT time |
+| NWS data is stale (off by hours) | NWS api.weather.gov can lag significantly behind actual conditions | v4.0 does NOT use NWS. Uses METAR + WU + PWS instead |
+| PWS temp 2-5F higher than WU | PWS sensor heat bias (solar radiation, placement). KCAELSEG23 consistently reads high | Expected behavior. PWS is leading indicator only, NOT settlement source |
+| WU API returns old high | `temperatureMax24Hour` is rolling 24h, not calendar day | Compare `wu_high_f` with METAR rounded. WU updates ~every 10 min |
 | `ConnectionRefusedError` on clientId=45 | IB Gateway not running or port wrong | Check .env: IBKR_PORT=4001, IBKR_CLIENT_ID_WEATHER=45 |
-| NWS API 503/timeout | api.weather.gov rate limited or down | Uses `run_in_executor` — non-blocking. Will retry next 5-min cycle |
+| IB Gateway and Client Portal API conflict | Both compete for same IB session — cannot run simultaneously | Use IB Gateway only (TWS socket API). Do not start Client Portal |
+| WU API key expires | Public key scraped from WU website, may be rotated | Re-scrape from wunderground.com network requests |
+| False BUY_YES signal from stale data | One source shows high temp but it's stale (hours old) | v4.0 cross-references METAR + WU — requires both to confirm before high-confidence signal |
+
+### Settlement Semantics (Critical)
+- "Exceed 75F" means **strictly > 75F**. WU high of exactly 75F = K75 YES **loses**.
+- WU rounds to integers. Need >= 75.6F actual for WU to report 76F > 75F.
+- Settlement source is WU's processed high, which matches METAR ASOS rounded (93% over 30 days).
+
+### Data Source Hierarchy
+```
+METAR (hourly, :53 past hour) = settlement source (93% match with WU)
+WU Current (~10 min updates)  = confirmation + actual settlement value
+PWS KCAELSEG23 (5 min)        = leading indicator (reads 2-5F high)
+```
 
 ---
 
