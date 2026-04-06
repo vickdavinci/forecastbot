@@ -5,8 +5,9 @@ THESIS (validated March 5, 2026):
   WU settlement = METAR ASOS data (rounded to integer °F).
   93% match rate over 30 days when accounting for UTC/PT offset.
 
-  PWS stations (KCAELSEG23) read 2–5°F higher than WU published.
-  They are NOT the settlement source, but ARE leading indicators.
+  PWS stations (KCAELSEG23) read 2–5°F higher than WU published
+  (sensor bias). Leading indicator in TIME — updates every 5 min
+  vs METAR's hourly. PWS > strike+3°F predicts METAR will cross.
 
   Edge window = time between data source crossing a strike
   and IBKR market repricing:
@@ -19,11 +20,11 @@ ARCHITECTURE:
   Three data sources polled in parallel:
     1. METAR (aviationweather.gov) — hourly, settlement source
     2. WU current (api.weather.com) — ~10 min updates, confirmation
-    3. PWS KCAELSEG23 (api.weather.com) — 5 min, leading indicator
+    3. PWS KCAELSEG23 (api.weather.com) — 5 min, early warning (bias +3°F)
   Plus IB market data streaming continuously.
 
   Golden hour: 12:00–14:30 PT (when daily peak occurs 83% of days)
-  Poll rate: 60s during golden hour, 300s outside
+  Poll rate: 300s normal, 60s golden hour, 30s approaching strike, 30s signal
 
 SETTLEMENT SEMANTICS:
   "Exceed 75°F" means STRICTLY > 75°F.
@@ -70,7 +71,6 @@ logging.basicConfig(
 log = logging.getLogger("weather_edge")
 
 PT = ZoneInfo("America/Los_Angeles")
-ET = ZoneInfo("America/New_York")
 
 # ─── CONFIG ───────────────────────────────────────────────────────────────────
 IBKR_HOST      = os.getenv("IBKR_HOST",                  "127.0.0.1")
@@ -84,6 +84,13 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID",   "")
 POLL_GOLDEN_SEC    = 60     # during golden hour (12–14:30 PT)
 POLL_NORMAL_SEC    = 300    # outside golden hour
 POLL_SIGNAL_SEC    = 30     # after a signal is detected
+POLL_APPROACHING_SEC = 30   # when observed high is near a strike
+
+# Strike proximity — accelerate polling when temp is approaching a strike
+APPROACHING_THRESHOLD_F = 3  # within 3°F of any active strike
+APPROACHING_BURST_SEC   = 600   # 10 min burst of fast polling
+APPROACHING_COOLDOWN_SEC = 600  # 10 min cooldown before re-engaging
+METAR_FETCH_INTERVAL_SEC = 3300  # 55 min — METAR updates hourly at ~:53
 
 # Golden hour — when daily peak occurs (validated: 30 days of KCAELSEG23 data)
 GOLDEN_START_HOUR  = 12     # 12:00 PM PT
@@ -113,28 +120,28 @@ CROSSING_CSV  = os.path.join(LOG_DIR, "weather_crossings_v4.csv")
 # ─── COLORS ───────────────────────────────────────────────────────────────────
 
 class C:
-    """ANSI color codes for terminal output."""
+    """ANSI color codes for terminal output (white/light macOS terminal)."""
     RESET   = "\033[0m"
     BOLD    = "\033[1m"
-    DIM     = "\033[2m"
-    # Foreground
-    RED     = "\033[91m"
-    GREEN   = "\033[92m"
-    YELLOW  = "\033[93m"
-    BLUE    = "\033[94m"
-    MAGENTA = "\033[95m"
-    CYAN    = "\033[96m"
-    WHITE   = "\033[97m"
-    GRAY    = "\033[90m"
+    DIM     = "\033[38;5;242m"    # medium gray — \033[2m is invisible on white
+    # Foreground — 256-color palette tuned for white backgrounds
+    RED     = "\033[38;5;160m"     # strong red
+    GREEN   = "\033[38;5;28m"     # forest green — readable on white
+    YELLOW  = "\033[38;5;166m"    # orange — yellow is unreadable on white
+    BLUE    = "\033[38;5;25m"     # deep blue
+    MAGENTA = "\033[38;5;127m"    # dark magenta
+    CYAN    = "\033[38;5;30m"     # dark teal — standard cyan washes out
+    WHITE   = "\033[30m"          # black text on white background
+    GRAY    = "\033[38;5;242m"    # medium gray — 90 is too faint on white
     # Combinations
-    HEADER  = "\033[96m"      # cyan — borders, headers
-    VALUE   = "\033[97m\033[1m"  # bold white — key values
-    LABEL   = "\033[90m"      # gray — labels
-    OK      = "\033[92m"      # green — confirmed
-    WARN    = "\033[93m"      # yellow — waiting, warnings
-    ALERT   = "\033[91m\033[1m"  # bold red — signals
-    EDGE    = "\033[95m"      # magenta — edge measurements
-    SETTLE  = "\033[92m\033[1m"  # bold green — settlement
+    HEADER  = "\033[38;5;25m"     # deep blue — borders, headers
+    VALUE   = "\033[1m"           # bold black — key values
+    LABEL   = "\033[38;5;242m"    # medium gray — labels
+    OK      = "\033[38;5;28m"     # forest green — confirmed
+    WARN    = "\033[38;5;166m"    # orange — waiting, warnings
+    ALERT   = "\033[38;5;160m\033[1m"  # bold red — signals
+    EDGE    = "\033[38;5;127m"    # dark magenta — edge measurements
+    SETTLE  = "\033[38;5;28m\033[1m"   # bold forest green — settlement
 
 
 # ─── HELPERS ──────────────────────────────────────────────────────────────────
@@ -207,6 +214,8 @@ class StrikeCrossing:
     metar_crossed_at: float = 0.0     # EDGE STARTS — METAR is settlement source
     wu_crossed_at: float = 0.0        # settlement confirmed
     market_repriced_at: float = 0.0   # EDGE CLOSES — YES ask jumped > 0.80
+    metar_historical: bool = False    # True if already exceeded at bot start
+    wu_historical: bool = False       # True if already exceeded at bot start
 
     def metar_to_wu_lag(self) -> Optional[float]:
         """Minutes from METAR crossing to WU confirming. Hypothesis: 7–10 min."""
@@ -238,17 +247,22 @@ class StrikeCrossing:
 @dataclass
 class DayState:
     date_pt: str = ""
-    # Tracked highs from each source
-    metar_high_f: float = 0.0       # max METAR reading today (decimal)
+    # WU day high — tracked from max WU current temp readings (not API 24h max)
+    wu_high_f: int = 0
+    wu_api_24h_high: int = 0        # API temperatureMax24Hour (rolling, may include yesterday)
+    forecast_high_f: int = 0        # WU forecast high for today (from 5-day forecast API)
+    # Bot-session highs — max each source reported since scanner started
+    metar_high_f: float = 0.0       # max METAR reading since bot start (decimal)
     metar_high_rounded: int = 0     # rounded — predicts WU settlement
-    wu_high_f: int = 0              # WU published running high (integer) — SETTLEMENT
-    pws_high_f: float = 0.0        # PWS max today (leading indicator, reads high)
+    wu_bot_high_f: int = 0          # max WU current temp since bot start
+    pws_high_f: float = 0.0        # max PWS reading since bot start
     # Last readings
     last_metar: Optional[METARReading] = None
     last_wu: Optional[WUReading] = None
     last_pws: Optional[PWSReading] = None
     # Tracking
     total_polls: int = 0
+    crossings_initialized: bool = False  # first crossing check seeds historical state
     signals_fired: int = 0
     signal_strikes: list = field(default_factory=list)
     # WU update tracking
@@ -297,7 +311,11 @@ class DayState:
 
         Order: METAR (edge start) → WU (confirmation) → Market (edge close)
         PWS logged as early warning context only (reads 2–5°F high, not reliable).
+
+        First call seeds historical state — strikes already exceeded before
+        the bot started are logged as historical, not live edge opportunities.
         """
+        is_first = not self.crossings_initialized
         now = time.time()
         for strike in strikes:
             if strike not in self.crossings:
@@ -307,36 +325,52 @@ class DayState:
             # PWS early warning (complementary — NOT the edge trigger)
             if self.pws_high_f > strike and cx.pws_crossed_at == 0:
                 cx.pws_crossed_at = now
-                log.info(f"  ⚠ PWS early warning: K{strike:.0f}"
-                         f" (PWS={self.pws_high_f:.1f}°F, but reads 2–5°F high)")
+                if is_first:
+                    log.info(f"  ℹ PWS already > K{strike:.0f}"
+                             f" at bot start (PWS={self.pws_high_f:.1f}°F)")
+                else:
+                    log.info(f"  ⚠ PWS early warning: K{strike:.0f}"
+                             f" (PWS={self.pws_high_f:.1f}°F, but reads 2–5°F high)")
 
             # METAR crossed = EDGE STARTS (METAR is the settlement source)
             if self.metar_high_rounded > strike and cx.metar_crossed_at == 0:
                 cx.metar_crossed_at = now
-                pws_note = ""
-                if cx.pws_crossed_at:
-                    pws_note = (f"  (PWS warned {cx.pws_early_warning():.1f}min"
-                                f" earlier)")
-                log.info(f"  ⚡ EDGE START: METAR crossed K{strike:.0f}"
-                         f" (METAR high={self.metar_high_rounded}°F)"
-                         f" — WU should follow in ~10min{pws_note}")
+                cx.metar_historical = is_first
+                if is_first:
+                    log.info(f"  ℹ METAR already > K{strike:.0f}"
+                             f" at bot start (METAR={self.metar_high_rounded}°F)")
+                else:
+                    pws_note = ""
+                    if cx.pws_crossed_at:
+                        pws_note = (f"  (PWS warned {cx.pws_early_warning():.1f}min"
+                                    f" earlier)")
+                    log.info(f"  ⚡ EDGE START: METAR crossed K{strike:.0f}"
+                             f" (METAR high={self.metar_high_rounded}°F)"
+                             f" — WU should follow in ~10min{pws_note}")
 
             # WU crossed = settlement confirmed
             if self.wu_high_f > strike and cx.wu_crossed_at == 0:
                 cx.wu_crossed_at = now
-                metar_lag = ""
-                if cx.metar_crossed_at:
-                    metar_lag = (f"  METAR→WU took"
-                                f" {cx.metar_to_wu_lag():.1f}min")
-                log.info(f"  ✓ WU CONFIRMED: K{strike:.0f}"
-                         f" (WU high={self.wu_high_f}°F){metar_lag}"
-                         f" — market should reprice in ~2–3min")
+                cx.wu_historical = is_first
+                if is_first:
+                    log.info(f"  ℹ WU already > K{strike:.0f}"
+                             f" at bot start (WU high={self.wu_high_f}°F)")
+                else:
+                    metar_lag = ""
+                    if cx.metar_crossed_at:
+                        metar_lag = (f"  METAR→WU took"
+                                    f" {cx.metar_to_wu_lag():.1f}min")
+                    log.info(f"  ✓ WU CONFIRMED: K{strike:.0f}"
+                             f" (WU high={self.wu_high_f}°F){metar_lag}"
+                             f" — market should reprice in ~2–3min")
+
+        self.crossings_initialized = True
 
     def check_market_repricing(self, prices: dict):
         """Detect when market reprices after a source crossing.
         This closes the edge window measurement."""
         now = time.time()
-        for strike, (ya, na, yd, nd) in prices.items():
+        for strike, (ya, na, yb, nb, yad, nad, ybd, nbd) in prices.items():
             if strike not in self.crossings:
                 continue
             cx = self.crossings[strike]
@@ -491,6 +525,28 @@ def fetch_pws() -> Optional[PWSReading]:
         return None
 
 
+def fetch_wu_forecast_high() -> Optional[int]:
+    """Fetch today's forecast high temperature from WU 5-day forecast.
+    Returns integer °F or None on failure."""
+    try:
+        url = (
+            f"https://api.weather.com/v3/wx/forecast/daily/5day"
+            f"?apiKey={WU_API_KEY}"
+            f"&geocode={WU_KLAX_GEOCODE}"
+            f"&language=en-US&units=e&format=json"
+        )
+        r = requests.get(url, headers={"User-Agent": "forecastbot/4.0"}, timeout=10)
+        r.raise_for_status()
+        data = r.json()
+        highs = data.get("calendarDayTemperatureMax", [])
+        if highs and highs[0] is not None:
+            return int(highs[0])
+        return None
+    except Exception as e:
+        log.warning(f"  WU forecast fetch failed: {e}")
+        return None
+
+
 # ─── IB PRICE FEED ───────────────────────────────────────────────────────────
 
 class IBPriceFeed:
@@ -521,8 +577,11 @@ class IBPriceFeed:
             )
             log.info(f"  IB connected (clientId={IBKR_CLIENT_ID})")
 
-            for day_offset in range(0, 3):
-                try_date = datetime.now(ET) + timedelta(days=day_offset)
+            # UHLAX: measurement date = today, last trade date = tomorrow.
+            # IB's lastTradeDateOrContractMonth = expiry/last-trade date.
+            # Start from tomorrow (today's measurement), try up to +3 days.
+            for day_offset in range(1, 4):
+                try_date = datetime.now(PT) + timedelta(days=day_offset)
                 try_str = try_date.strftime("%Y%m%d")
                 c = Contract()
                 c.symbol = "UHLAX"
@@ -557,11 +616,19 @@ class IBPriceFeed:
                          f"Warming up {IB_WARMUP_SEC}s…")
                 await asyncio.sleep(IB_WARMUP_SEC)
 
-                # Check for live prices
+                # Check for live prices — any sign of activity counts
+                # (bid, ask, last, or volume on either leg)
                 live_count = 0
                 for s in common:
-                    ya, na, _, _ = self._read(s)
-                    if ya > 0 and na > 0:
+                    yt, nt = self.pairs[s]
+                    has_activity = (
+                        (hasattr(yt, 'bid') and yt.bid is not None and yt.bid > 0)
+                        or (hasattr(yt, 'ask') and yt.ask is not None and yt.ask > 0)
+                        or (hasattr(nt, 'bid') and nt.bid is not None and nt.bid > 0)
+                        or (hasattr(nt, 'ask') and nt.ask is not None and nt.ask > 0)
+                        or (hasattr(yt, 'volume') and yt.volume is not None and yt.volume > 0)
+                    )
+                    if has_activity:
                         live_count += 1
 
                 if live_count > 0:
@@ -571,10 +638,9 @@ class IBPriceFeed:
                     log.info(f"  Live prices on {live_count}/{len(common)} strikes")
                     return True
 
-                log.warning(f"  No live prices for {try_str} — trying next day…")
-                for yt, nt in self.pairs.values():
-                    self.ib.cancelMktData(yt)
-                    self.ib.cancelMktData(nt)
+                log.info(f"  No live prices for {try_str} — trying next day…")
+                # Don't cancel — ib_async logs noisy errors on reqId lookup.
+                # Subscriptions are harmless and get cleaned up on disconnect.
                 self.pairs = {}
 
             log.warning("  UHLAX: no actively-trading contracts found")
@@ -585,24 +651,30 @@ class IBPriceFeed:
             return False
 
     def _read(self, strike: float) -> tuple:
-        """Returns (yes_ask, no_ask, yes_depth, no_depth)."""
+        """Returns (yes_ask, no_ask, yes_bid, no_bid,
+                    yes_ask_depth, no_ask_depth, yes_bid_depth, no_bid_depth)."""
         if strike not in self.pairs:
-            return -1.0, -1.0, 0, 0
+            return -1.0, -1.0, -1.0, -1.0, 0, 0, 0, 0
         yt, nt = self.pairs[strike]
         ya = float(yt.ask) if hasattr(yt, 'ask') and yt.ask is not None and yt.ask > 0 else -1.0
         na = float(nt.ask) if hasattr(nt, 'ask') and nt.ask is not None and nt.ask > 0 else -1.0
-        yd = int(yt.askSize) if hasattr(yt, 'askSize') and yt.askSize is not None else 0
-        nd = int(nt.askSize) if hasattr(nt, 'askSize') and nt.askSize is not None else 0
-        return ya, na, yd, nd
+        yb = float(yt.bid) if hasattr(yt, 'bid') and yt.bid is not None and yt.bid > 0 else -1.0
+        nb = float(nt.bid) if hasattr(nt, 'bid') and nt.bid is not None and nt.bid > 0 else -1.0
+        yad = int(yt.askSize) if hasattr(yt, 'askSize') and yt.askSize is not None else 0
+        nad = int(nt.askSize) if hasattr(nt, 'askSize') and nt.askSize is not None else 0
+        ybd = int(yt.bidSize) if hasattr(yt, 'bidSize') and yt.bidSize is not None else 0
+        nbd = int(nt.bidSize) if hasattr(nt, 'bidSize') and nt.bidSize is not None else 0
+        return ya, na, yb, nb, yad, nad, ybd, nbd
 
     def read_all(self) -> dict:
-        """Returns {strike: (yes_ask, no_ask, yes_depth, no_depth)}
-        Only strikes with valid prices."""
+        """Returns {strike: (ya, na, yb, nb, yad, nad, ybd, nbd)}
+        Includes any strike with market activity (bid or ask on either side)."""
         result = {}
         for s in self.pairs:
-            ya, na, yd, nd = self._read(s)
-            if ya > 0 and na > 0:
-                result[s] = (ya, na, yd, nd)
+            vals = self._read(s)
+            ya, na, yb, nb = vals[:4]
+            if ya > 0 or na > 0 or yb > 0 or nb > 0:
+                result[s] = vals
         return result
 
     def stop(self):
@@ -641,7 +713,12 @@ def detect_signals(day: DayState, prices: dict) -> list[Signal]:
          If market hasn't moved yet, that's our edge.
       2. WU already updated past strike but market still hasn't repriced.
       3. Temperature peaked and falling → market still pricing YES too high.
-      4. PWS leading indicator during golden hour — softer signal.
+      4. PWS early warning — updates every 5 min vs METAR's hourly. When
+         PWS > strike + 3°F (bias-adjusted), METAR likely crosses next update.
+
+    Signals 1 & 2 only fire for LIVE crossings — strikes that a source crossed
+    while the bot was running. Historical crossings (already exceeded at bot start)
+    are not actionable since the market already repriced hours ago.
     """
     signals = []
 
@@ -653,12 +730,23 @@ def detect_signals(day: DayState, prices: dict) -> list[Signal]:
     now_pt = datetime.now(PT)
     hour = now_pt.hour
 
-    for strike, (ya, na, yd, nd) in prices.items():
+    for strike, (ya, na, yb, nb, yad, nad, ybd, nbd) in prices.items():
+        # Skip strikes with missing prices — can't evaluate edge
+        if ya <= 0 or na <= 0:
+            continue
+
         market_yes_prob = ya  # YES ask price = implied probability
 
+        # Check if crossings for this strike are live (not historical)
+        cx = day.crossings.get(strike)
+        metar_is_live = (cx and cx.metar_crossed_at > 0
+                         and not cx.metar_historical)
+        wu_is_live = (cx and cx.wu_crossed_at > 0
+                      and not cx.wu_historical)
+
         # ── SIGNAL 1: METAR confirms exceed, market underprices YES ──────
-        # METAR rounded high > strike → WU will likely publish > strike
-        if metar_high > strike:
+        # Only fire if METAR crossed this strike LIVE (not at bot start)
+        if metar_high > strike and metar_is_live:
             fair_yes = 0.93
             edge = fair_yes - market_yes_prob
             if edge >= EDGE_ALERT_SCORE and ya < 0.90:
@@ -666,13 +754,14 @@ def detect_signals(day: DayState, prices: dict) -> list[Signal]:
                     strike=strike, direction="BUY_YES",
                     reason=f"METAR_CONFIRM: METAR high {metar_high}°F > K{strike:.0f}",
                     edge_score=round(edge, 3),
-                    yes_ask=ya, no_ask=na, yes_depth=yd, no_depth=nd,
+                    yes_ask=ya, no_ask=na, yes_depth=yad, no_depth=nad,
                     metar_temp=metar_temp, wu_high=wu_high, pws_temp=pws_temp,
                     profit_per_contract=round(1.0 - ya, 4),
                 ))
 
         # ── SIGNAL 2: WU already published high > strike, market lagging ─
-        if wu_high > strike:
+        # Only fire if WU crossed this strike LIVE
+        if wu_high > strike and wu_is_live:
             fair_yes = 0.97
             edge = fair_yes - market_yes_prob
             if edge >= EDGE_ALERT_SCORE and ya < 0.93:
@@ -680,12 +769,13 @@ def detect_signals(day: DayState, prices: dict) -> list[Signal]:
                     strike=strike, direction="BUY_YES",
                     reason=f"WU_CONFIRM: WU high {wu_high}°F > K{strike:.0f}",
                     edge_score=round(edge, 3),
-                    yes_ask=ya, no_ask=na, yes_depth=yd, no_depth=nd,
+                    yes_ask=ya, no_ask=na, yes_depth=yad, no_depth=nad,
                     metar_temp=metar_temp, wu_high=wu_high, pws_temp=pws_temp,
                     profit_per_contract=round(1.0 - ya, 4),
                 ))
 
         # ── SIGNAL 3: Post-peak, temp falling, strike NOT exceeded ───────
+        # Uses wu_high (day high from API) — safe regardless of when bot started
         if hour >= 15 and metar_high <= strike and wu_high <= strike:
             gap_to_strike = strike - max(metar_high, wu_high)
             if gap_to_strike >= 2:
@@ -697,23 +787,28 @@ def detect_signals(day: DayState, prices: dict) -> list[Signal]:
                         reason=f"POST_PEAK: high={max(metar_high, wu_high)}°F,"
                                f" K{strike:.0f} gap={gap_to_strike}°F",
                         edge_score=round(edge, 3),
-                        yes_ask=ya, no_ask=na, yes_depth=yd, no_depth=nd,
+                        yes_ask=ya, no_ask=na, yes_depth=yad, no_depth=nad,
                         metar_temp=metar_temp, wu_high=wu_high, pws_temp=pws_temp,
                         profit_per_contract=round(1.0 - na, 4),
                     ))
 
-        # ── SIGNAL 4: PWS leading indicator during golden hour ───────────
+        # ── SIGNAL 4: PWS early warning during golden hour ────────────────
+        # PWS reads 2–5°F higher (sensor bias), but updates every 5 min vs
+        # METAR's hourly. When PWS > strike + 3°F (bias-adjusted), METAR
+        # will likely cross the strike at its next hourly update.
+        # Softer signal — only during golden hour when temps are climbing.
         if (GOLDEN_START_HOUR <= hour < GOLDEN_END_HOUR
-                and pws_temp > strike + 2
+                and pws_temp > strike + 3
                 and metar_high <= strike):
             fair_yes = 0.60
             edge = fair_yes - market_yes_prob
             if edge >= EDGE_ALERT_SCORE and ya < 0.50:
                 signals.append(Signal(
                     strike=strike, direction="BUY_YES",
-                    reason=f"PWS_LEADING: PWS={pws_temp:.1f}°F trending > K{strike:.0f}",
+                    reason=f"PWS_EARLY: PWS={pws_temp:.1f}°F > K{strike:.0f}+3"
+                           f" (bias-adj), METAR likely next update",
                     edge_score=round(edge, 3),
-                    yes_ask=ya, no_ask=na, yes_depth=yd, no_depth=nd,
+                    yes_ask=ya, no_ask=na, yes_depth=yad, no_depth=nad,
                     metar_temp=metar_temp, wu_high=wu_high, pws_temp=pws_temp,
                     profit_per_contract=round(1.0 - ya, 4),
                 ))
@@ -790,13 +885,13 @@ def write_source_tick(day: DayState):
 
 
 def write_market_tick(day: DayState, strike: float, ya: float, na: float,
-                      yd: int, nd: int):
+                      yad: int, nad: int):
     now_pt = datetime.now(PT)
     is_golden = GOLDEN_START_HOUR <= now_pt.hour < GOLDEN_END_HOUR
     with open(TICKS_CSV, "a", newline="") as f:
         csv.writer(f).writerow([
             now_pt.strftime("%Y-%m-%d %H:%M:%S"), day.date_pt, strike,
-            ya, na, yd, nd,
+            ya, na, yad, nad,
             day.metar_high_rounded, day.wu_high_f,
             day.last_pws.temp_f if day.last_pws else "",
             "1" if is_golden else "0",
@@ -854,63 +949,95 @@ def print_source_status(day: DayState):
           f"  {C.HEADER}│{C.RESET}")
     print(f"  {C.HEADER}└─────────────────────────────────────────────────────────────────┘{C.RESET}")
 
+    # ── Forecast summary ──
+    if day.forecast_high_f > 0:
+        fh = day.forecast_high_f
+        obs_high = max(day.metar_high_rounded, day.wu_high_f)
+        if obs_high > 0:
+            delta = obs_high - fh
+            if delta > 0:
+                trend = f"{C.GREEN}+{delta}°F above forecast{C.RESET}"
+            elif delta < 0:
+                trend = f"{C.DIM}{delta}°F below forecast{C.RESET}"
+            else:
+                trend = f"{C.YELLOW}at forecast{C.RESET}"
+            print(f"\n  {C.BOLD}{C.WHITE}FORECAST HIGH: {C.EDGE}{fh}°F{C.RESET}"
+                  f"  {C.DIM}│{C.RESET}  observed high so far: {C.VALUE}{obs_high}°F{C.RESET}"
+                  f"  ({trend})")
+        else:
+            print(f"\n  {C.BOLD}{C.WHITE}FORECAST HIGH: {C.EDGE}{fh}°F{C.RESET}")
+
     # ── Data sources table ──
     print(f"\n  {C.BOLD}{C.WHITE}DATA SOURCES{C.RESET}")
-    print(f"  {C.HEADER}┌──────────┬───────────┬──────────┬──────────┬─────────────────┐{C.RESET}")
-    print(f"  {C.HEADER}│{C.RESET} {C.DIM}Source{C.RESET}   "
-          f"{C.HEADER}│{C.RESET} {C.DIM}Current{C.RESET}   "
-          f"{C.HEADER}│{C.RESET} {C.DIM}High{C.RESET}     "
-          f"{C.HEADER}│{C.RESET} {C.DIM}Obs Time{C.RESET} "
-          f"{C.HEADER}│{C.RESET} {C.DIM}Notes{C.RESET}           {C.HEADER}│{C.RESET}")
-    print(f"  {C.HEADER}├──────────┼───────────┼──────────┼──────────┼─────────────────┤{C.RESET}")
+    print(f"  {C.HEADER}┌──────────┬───────────┬──────────┬──────────┬──────────┬─────────────────┐{C.RESET}")
+    print(f"  {C.HEADER}│{C.RESET} {C.WHITE}Source{C.RESET}   "
+          f"{C.HEADER}│{C.RESET} {C.WHITE}Current{C.RESET}   "
+          f"{C.HEADER}│{C.RESET} {C.WHITE}Day High{C.RESET} "
+          f"{C.HEADER}│{C.RESET} {C.WHITE}Bot High{C.RESET} "
+          f"{C.HEADER}│{C.RESET} {C.WHITE}Obs Time{C.RESET} "
+          f"{C.HEADER}│{C.RESET} {C.WHITE}Notes{C.RESET}           {C.HEADER}│{C.RESET}")
+    print(f"  {C.HEADER}├──────────┼───────────┼──────────┼──────────┼──────────┼─────────────────┤{C.RESET}")
+
+    # Notes column is 17 chars wide (between │ markers)
+    # Content: 1 leading space + up to 16 chars of text
+    NOTES_W = 16
 
     # METAR row
     if day.last_metar:
         m = day.last_metar
+        notes = f"wind={m.wind_mph:.0f}mph"
         print(f"  {C.HEADER}│{C.RESET} {C.CYAN}METAR{C.RESET}    "
               f"{C.HEADER}│{C.RESET} {C.VALUE}{m.temp_f:>6.1f}°F{C.RESET}  "
+              f"{C.HEADER}│{C.RESET} {C.DIM}     —{C.RESET}   "
               f"{C.HEADER}│{C.RESET} {C.VALUE}{day.metar_high_rounded:>5}°F{C.RESET}  "
               f"{C.HEADER}│{C.RESET} {m.obs_time_pt:<8} "
-              f"{C.HEADER}│{C.RESET} {C.DIM}wind={m.wind_mph:.0f}mph{C.RESET}       {C.HEADER}│{C.RESET}")
+              f"{C.HEADER}│{C.RESET} {C.DIM}{notes:<{NOTES_W}}{C.RESET}{C.HEADER}│{C.RESET}")
     else:
         print(f"  {C.HEADER}│{C.RESET} {C.CYAN}METAR{C.RESET}    "
               f"{C.HEADER}│{C.RESET} {C.DIM}  no data{C.RESET}  "
               f"{C.HEADER}│{C.RESET} {C.DIM}     —{C.RESET}   "
+              f"{C.HEADER}│{C.RESET} {C.DIM}     —{C.RESET}   "
               f"{C.HEADER}│{C.RESET} {C.DIM}—{C.RESET}        "
-              f"{C.HEADER}│{C.RESET}                 {C.HEADER}│{C.RESET}")
+              f"{C.HEADER}│{C.RESET} {'':<{NOTES_W}}{C.HEADER}│{C.RESET}")
 
     # WU row
     if day.last_wu:
         w = day.last_wu
         wu_age = int(time.time() - day.wu_last_update_wallclock) if day.wu_last_update_wallclock > 0 else 0
+        notes = f"age={wu_age}s upd={day.wu_update_count}"
         print(f"  {C.HEADER}│{C.RESET} {C.SETTLE}WU{C.RESET}       "
               f"{C.HEADER}│{C.RESET} {C.VALUE}{w.temp_f:>6}°F{C.RESET}  "
               f"{C.HEADER}│{C.RESET} {C.SETTLE}{day.wu_high_f:>5}°F{C.RESET} ◀"
+              f"{C.HEADER}│{C.RESET} {C.VALUE}{day.wu_bot_high_f:>5}°F{C.RESET}  "
               f"{C.HEADER}│{C.RESET} {w.obs_time:<8} "
-              f"{C.HEADER}│{C.RESET} {C.DIM}age={wu_age}s upd={day.wu_update_count}{C.RESET}  {C.HEADER}│{C.RESET}")
+              f"{C.HEADER}│{C.RESET} {C.DIM}{notes:<{NOTES_W}}{C.RESET}{C.HEADER}│{C.RESET}")
     else:
         print(f"  {C.HEADER}│{C.RESET} {C.SETTLE}WU{C.RESET}       "
               f"{C.HEADER}│{C.RESET} {C.DIM}  no data{C.RESET}  "
               f"{C.HEADER}│{C.RESET} {C.DIM}     —{C.RESET}   "
+              f"{C.HEADER}│{C.RESET} {C.DIM}     —{C.RESET}   "
               f"{C.HEADER}│{C.RESET} {C.DIM}—{C.RESET}        "
-              f"{C.HEADER}│{C.RESET}                 {C.HEADER}│{C.RESET}")
+              f"{C.HEADER}│{C.RESET} {'':<{NOTES_W}}{C.HEADER}│{C.RESET}")
 
     # PWS row
     if day.last_pws:
         p = day.last_pws
+        notes = "reads 2-5°F hi"
         print(f"  {C.HEADER}│{C.RESET} {C.YELLOW}PWS{C.RESET}      "
               f"{C.HEADER}│{C.RESET} {C.VALUE}{p.temp_f:>6.1f}°F{C.RESET}  "
+              f"{C.HEADER}│{C.RESET} {C.DIM}     —{C.RESET}   "
               f"{C.HEADER}│{C.RESET} {C.VALUE}{day.pws_high_f:>5.0f}°F{C.RESET}  "
               f"{C.HEADER}│{C.RESET} {p.obs_time:<8} "
-              f"{C.HEADER}│{C.RESET} {C.DIM}reads 2-5°F hi{C.RESET}  {C.HEADER}│{C.RESET}")
+              f"{C.HEADER}│{C.RESET} {C.DIM}{notes:<{NOTES_W}}{C.RESET}{C.HEADER}│{C.RESET}")
     else:
         print(f"  {C.HEADER}│{C.RESET} {C.YELLOW}PWS{C.RESET}      "
               f"{C.HEADER}│{C.RESET} {C.DIM}  no data{C.RESET}  "
               f"{C.HEADER}│{C.RESET} {C.DIM}     —{C.RESET}   "
+              f"{C.HEADER}│{C.RESET} {C.DIM}     —{C.RESET}   "
               f"{C.HEADER}│{C.RESET} {C.DIM}—{C.RESET}        "
-              f"{C.HEADER}│{C.RESET}                 {C.HEADER}│{C.RESET}")
+              f"{C.HEADER}│{C.RESET} {'':<{NOTES_W}}{C.HEADER}│{C.RESET}")
 
-    print(f"  {C.HEADER}└──────────┴───────────┴──────────┴──────────┴─────────────────┘{C.RESET}")
+    print(f"  {C.HEADER}└──────────┴───────────┴──────────┴──────────┴──────────┴─────────────────┘{C.RESET}")
 
     # ── Drift ──
     drifts = []
@@ -927,12 +1054,8 @@ def print_source_status(day: DayState):
         clr = C.GREEN if abs(d) <= 2 else C.YELLOW if abs(d) <= 5 else C.RED
         drifts.append(f"PWS−METAR = {clr}{d:+.1f}°F{C.RESET}")
     if drifts:
-        print(f"\n  {C.BOLD}{C.WHITE}DRIFT{C.RESET}")
+        print(f"\n  {C.BOLD}{C.WHITE}DRIFT{C.RESET}  {C.DIM}(current temps){C.RESET}")
         print(f"    {'    '.join(drifts)}")
-        if day.metar_high_rounded > 0 and day.wu_high_f > 0:
-            hd = day.metar_high_rounded - day.wu_high_f
-            clr = C.GREEN if hd == 0 else C.YELLOW if abs(hd) <= 2 else C.RED
-            print(f"    High drift (METAR−WU) = {clr}{hd:+d}°F{C.RESET}")
 
     # ── Edge timeline ──
     active_crossings = {k: v for k, v in day.crossings.items()
@@ -975,20 +1098,48 @@ def print_market_prices(prices: dict, day: DayState):
         print(f"\n  {C.DIM}[IB prices not available — data collection mode]{C.RESET}")
         return
 
-    print(f"\n  {C.BOLD}{C.WHITE}MARKET PRICES{C.RESET}")
+    print(f"\n  {C.BOLD}{C.WHITE}MARKET PRICES{C.RESET}  {C.DIM}(ask prices — bid shown as [b] when no ask){C.RESET}")
     print(f"  {C.HEADER}┌────────┬─────────┬─────────┬─────────┬───────┬───────┬────────────────┐{C.RESET}")
-    print(f"  {C.HEADER}│{C.RESET} {C.DIM}Strike{C.RESET} "
-          f"{C.HEADER}│{C.RESET} {C.DIM}  YES{C.RESET}    "
-          f"{C.HEADER}│{C.RESET} {C.DIM}  NO{C.RESET}     "
-          f"{C.HEADER}│{C.RESET} {C.DIM}  SUM{C.RESET}    "
-          f"{C.HEADER}│{C.RESET} {C.DIM}  YD{C.RESET}   "
-          f"{C.HEADER}│{C.RESET} {C.DIM}  ND{C.RESET}   "
-          f"{C.HEADER}│{C.RESET} {C.DIM}Status{C.RESET}          {C.HEADER}│{C.RESET}")
+    print(f"  {C.HEADER}│{C.RESET} {C.WHITE}Strike{C.RESET} "
+          f"{C.HEADER}│{C.RESET} {C.WHITE}  YES{C.RESET}   "
+          f"{C.HEADER}│{C.RESET} {C.WHITE}   NO{C.RESET}   "
+          f"{C.HEADER}│{C.RESET} {C.WHITE}  SUM{C.RESET}   "
+          f"{C.HEADER}│{C.RESET} {C.WHITE}  YD{C.RESET}  "
+          f"{C.HEADER}│{C.RESET} {C.WHITE}  ND{C.RESET}  "
+          f"{C.HEADER}│{C.RESET} {C.WHITE}Status{C.RESET}         {C.HEADER}│{C.RESET}")
     print(f"  {C.HEADER}├────────┼─────────┼─────────┼─────────┼───────┼───────┼────────────────┤{C.RESET}")
 
     for strike in sorted(prices.keys()):
-        ya, na, yd, nd = prices[strike]
-        s = ya + na
+        ya, na, yb, nb, yad, nad, ybd, nbd = prices[strike]
+
+        # Format prices — show ask, fallback to bid (dimmed), else dash
+        # All formats are exactly 6 visible chars to keep columns aligned
+        if ya > 0:
+            ya_str = f"${ya:>5.2f}"
+        elif yb > 0:
+            ya_str = f"{C.DIM}b{yb:>4.2f}{C.RESET} "
+        else:
+            ya_str = f"{'—':>6}"
+
+        if na > 0:
+            na_str = f"${na:>5.2f}"
+        elif nb > 0:
+            na_str = f"{C.DIM}b{nb:>4.2f}{C.RESET} "
+        else:
+            na_str = f"{'—':>6}"
+
+        if ya > 0 and na > 0:
+            s = ya + na
+            sum_clr = C.GREEN if s < 0.95 else C.YELLOW if s < 1.0 else C.RED
+            sum_str = f"{sum_clr}${s:>5.2f}{C.RESET}"
+        else:
+            sum_str = f"{C.DIM}{'—':>6}{C.RESET}"
+
+        # Show ask depth, or bid depth (dimmed) when showing bid price
+        yd_val = yad if ya > 0 else ybd
+        nd_val = nad if na > 0 else nbd
+        yd_str = f"{yd_val:>5}" if ya > 0 or yb <= 0 else f"{C.DIM}{yd_val:>5}{C.RESET}"
+        nd_str = f"{nd_val:>5}" if na > 0 or nb <= 0 else f"{C.DIM}{nd_val:>5}{C.RESET}"
 
         metar_exceeds = day.metar_predicts_exceeds(strike)
         wu_exceeds = day.wu_settled_exceeds(strike)
@@ -1006,18 +1157,15 @@ def print_market_prices(prices: dict, day: DayState):
             status = ""
             status_pad = 0
 
-        # Color the sum based on parity
-        sum_clr = C.GREEN if s < 0.95 else C.YELLOW if s < 1.0 else C.RED
-
         # Pad status to fill table cell (16 chars visible)
         pad = " " * max(0, 14 - status_pad)
 
         print(f"  {C.HEADER}│{C.RESET} {C.VALUE}K{strike:<5.0f}{C.RESET} "
-              f"{C.HEADER}│{C.RESET} {C.WHITE}${ya:>5.2f}{C.RESET}   "
-              f"{C.HEADER}│{C.RESET} {C.WHITE}${na:>5.2f}{C.RESET}   "
-              f"{C.HEADER}│{C.RESET} {sum_clr}${s:>5.2f}{C.RESET}   "
-              f"{C.HEADER}│{C.RESET} {yd:>5} "
-              f"{C.HEADER}│{C.RESET} {nd:>5} "
+              f"{C.HEADER}│{C.RESET} {C.WHITE}{ya_str}{C.RESET}  "
+              f"{C.HEADER}│{C.RESET} {C.WHITE}{na_str}{C.RESET}  "
+              f"{C.HEADER}│{C.RESET} {sum_str}  "
+              f"{C.HEADER}│{C.RESET} {yd_str} "
+              f"{C.HEADER}│{C.RESET} {nd_str} "
               f"{C.HEADER}│{C.RESET} {status}{pad} {C.HEADER}│{C.RESET}")
 
     print(f"  {C.HEADER}└────────┴─────────┴─────────┴─────────┴───────┴───────┴────────────────┘{C.RESET}")
@@ -1091,9 +1239,10 @@ async def main():
     print(f"  {C.HEADER}║{C.RESET}  Golden Hour: {C.YELLOW}{GOLDEN_START_HOUR}:00–{GOLDEN_END_HOUR}:00 PT{C.RESET}"
           + " " * (W - 33) + f"{C.HEADER}║{C.RESET}")
     print(f"  {C.HEADER}║{C.RESET}  Poll: {POLL_GOLDEN_SEC}s {C.YELLOW}golden{C.RESET}"
-          f" │ {POLL_NORMAL_SEC}s {C.DIM}normal{C.RESET}"
+          f" │ {POLL_APPROACHING_SEC}s {C.CYAN}approaching{C.RESET}"
           f" │ {POLL_SIGNAL_SEC}s {C.RED}signal{C.RESET}"
-          + " " * (W - 47) + f"{C.HEADER}║{C.RESET}")
+          f" │ {POLL_NORMAL_SEC}s {C.DIM}normal{C.RESET}"
+          + " " * (W - 62) + f"{C.HEADER}║{C.RESET}")
     print(f"  {C.HEADER}║{C.RESET}  {C.RED}{C.BOLD}*** OBSERVATION ONLY — NO ORDERS ***{C.RESET}"
           + " " * (W - 38) + f"{C.HEADER}║{C.RESET}")
     print(f"  {C.HEADER}╚{'═'*W}╝{C.RESET}\n")
@@ -1116,11 +1265,18 @@ async def main():
 
     # ── Initial data fetch ────────────────────────────────────────────
     log.info("  Fetching initial data from all sources…")
-    metar, wu, pws = await asyncio.gather(
+    metar, wu, pws, forecast_high = await asyncio.gather(
         loop.run_in_executor(None, fetch_metar),
         loop.run_in_executor(None, fetch_wu_current),
         loop.run_in_executor(None, fetch_pws),
+        loop.run_in_executor(None, fetch_wu_forecast_high),
     )
+
+    if forecast_high is not None:
+        day.forecast_high_f = forecast_high
+        log.info(f"  WU Forecast High: {forecast_high}°F")
+    else:
+        log.warning("  WU forecast high unavailable")
 
     if metar:
         day.last_metar = metar
@@ -1131,9 +1287,16 @@ async def main():
 
     if wu:
         day.last_wu = wu
-        day.wu_high_f = wu.high_f
+        # Don't use wu.high_f (temperatureMax24Hour) — it's a rolling 24h max
+        # that bleeds yesterday's high into the morning. Track day high from
+        # current temp readings instead. wu.high_f only trustworthy after ~14:00 PT
+        # when the 24h window is fully within today.
+        day.wu_high_f = wu.temp_f  # seed with current temp, not rolling 24h max
+        day.wu_api_24h_high = wu.high_f  # keep for reference/logging
+        day.wu_bot_high_f = wu.temp_f
         day.wu_last_obs_time = wu.obs_time
-        log.info(f"  WU: temp={wu.temp_f}°F  high={wu.high_f}°F  obs={wu.obs_time}")
+        log.info(f"  WU: temp={wu.temp_f}°F  api_24h_high={wu.high_f}°F"
+                 f"  (using current temp as day high seed)  obs={wu.obs_time}")
 
     if pws:
         day.last_pws = pws
@@ -1143,6 +1306,7 @@ async def main():
     send_telegram(
         f"🌤 *Weather Edge v4.0 Started*\n"
         f"Date: `{today_str}`\n"
+        f"Forecast high: `{day.forecast_high_f}°F`\n"
         f"Sources: METAR + WU + PWS({PWS_STATION_ID})\n"
         f"METAR: `{day.metar_high_rounded}°F`  WU: `{day.wu_high_f}°F`\n"
         f"IB: `{'active — ' + str(len(ib_feed.pairs)) + ' strikes' if ib_connected else 'unavailable'}`\n"
@@ -1154,6 +1318,9 @@ async def main():
     last_date = today_str
     last_alert_ts = {}  # strike → timestamp of last alert
     signal_mode_until = 0.0  # time.time() until which we poll at signal rate
+    approaching_start = 0.0  # when approaching burst started
+    approaching_cooldown_until = 0.0  # cooldown end timestamp
+    last_metar_fetch_ts = time.time()  # initial fetch just happened
 
     try:
         while True:
@@ -1181,12 +1348,25 @@ async def main():
                 last_date = today_str
                 last_alert_ts = {}
 
-            # ── Fetch all three data sources in parallel ──────────────
-            metar, wu, pws = await asyncio.gather(
-                loop.run_in_executor(None, fetch_metar),
-                loop.run_in_executor(None, fetch_wu_current),
-                loop.run_in_executor(None, fetch_pws),
-            )
+            # ── Fetch data sources ───────────────────────────────────
+            # METAR updates hourly — skip fetch if we already have a
+            # recent reading to avoid wasting API calls during fast polling.
+            fetch_ts = time.time()
+            need_metar = (fetch_ts - last_metar_fetch_ts) >= METAR_FETCH_INTERVAL_SEC
+
+            if need_metar:
+                metar, wu, pws = await asyncio.gather(
+                    loop.run_in_executor(None, fetch_metar),
+                    loop.run_in_executor(None, fetch_wu_current),
+                    loop.run_in_executor(None, fetch_pws),
+                )
+                last_metar_fetch_ts = fetch_ts
+            else:
+                metar = None  # reuse cached day.last_metar
+                wu, pws = await asyncio.gather(
+                    loop.run_in_executor(None, fetch_wu_current),
+                    loop.run_in_executor(None, fetch_pws),
+                )
 
             day.total_polls += 1
 
@@ -1212,11 +1392,15 @@ async def main():
             # Update WU
             if wu:
                 day.last_wu = wu
-                if wu.high_f > day.wu_high_f:
+                day.wu_api_24h_high = max(day.wu_api_24h_high, wu.high_f)
+                # Track day high from current temp readings (not rolling 24h API)
+                if wu.temp_f > day.wu_high_f:
                     old = day.wu_high_f
-                    day.wu_high_f = wu.high_f
+                    day.wu_high_f = wu.temp_f
                     if old > 0:
-                        log.info(f"  ✓ WU NEW HIGH: {old}°F → {wu.high_f}°F (SETTLEMENT)")
+                        log.info(f"  ✓ WU NEW DAY HIGH: {old}°F → {wu.temp_f}°F (SETTLEMENT)")
+                if wu.temp_f > day.wu_bot_high_f:
+                    day.wu_bot_high_f = wu.temp_f
                 # Track WU update cycles
                 if wu.obs_time != day.wu_last_obs_time:
                     day.wu_last_obs_time = wu.obs_time
@@ -1258,8 +1442,8 @@ async def main():
 
             # ── Log market ticks ──────────────────────────────────────
             for strike in sorted(prices.keys()):
-                ya, na, yd, nd = prices[strike]
-                write_market_tick(day, strike, ya, na, yd, nd)
+                ya, na, yb, nb, yad, nad, ybd, nbd = prices[strike]
+                write_market_tick(day, strike, ya, na, yad, nad)
 
             # ── Detect signals ────────────────────────────────────────
             if prices:
@@ -1281,9 +1465,47 @@ async def main():
 
             # ── Determine next poll interval ──────────────────────────
             now_ts = time.time()
+
+            # Check if observed high is approaching any active strike
+            obs_high = max(day.metar_high_rounded, day.wu_high_f)
+            approaching_strike = None
+            if obs_high > 0 and ib_feed.strikes:
+                for s in ib_feed.strikes:
+                    gap_to_strike = float(s) - obs_high
+                    if 0 < gap_to_strike <= APPROACHING_THRESHOLD_F:
+                        approaching_strike = int(s)
+                        break  # nearest strike above is enough
+
+            # Approaching mode with burst/cooldown to avoid API rate limits
+            use_approaching = False
+            if approaching_strike is not None and now_ts >= approaching_cooldown_until:
+                if approaching_start == 0.0:
+                    # Start a new burst
+                    approaching_start = now_ts
+                    use_approaching = True
+                    log.info(f"  {C.CYAN}▶ APPROACHING MODE: K{approaching_strike}"
+                             f" (obs={obs_high}°F, gap={approaching_strike - obs_high}°F)"
+                             f" — burst {APPROACHING_BURST_SEC}s{C.RESET}")
+                elif now_ts - approaching_start < APPROACHING_BURST_SEC:
+                    # Still within burst window
+                    use_approaching = True
+                else:
+                    # Burst expired → enter cooldown
+                    approaching_cooldown_until = now_ts + APPROACHING_COOLDOWN_SEC
+                    approaching_start = 0.0
+                    log.info(f"  {C.DIM}⏸ Approaching cooldown"
+                             f" ({APPROACHING_COOLDOWN_SEC}s){C.RESET}")
+            elif approaching_strike is None:
+                # Temp moved away or crossed — reset state
+                approaching_start = 0.0
+
             if now_ts < signal_mode_until:
                 interval = POLL_SIGNAL_SEC
                 mode_str = "signal"
+            elif use_approaching:
+                interval = POLL_APPROACHING_SEC
+                remaining = int(APPROACHING_BURST_SEC - (now_ts - approaching_start))
+                mode_str = f"approaching K{approaching_strike} [{remaining}s left]"
             elif GOLDEN_START_HOUR <= now_pt.hour < GOLDEN_END_HOUR:
                 interval = POLL_GOLDEN_SEC
                 mode_str = "golden"
@@ -1291,8 +1513,17 @@ async def main():
                 interval = POLL_NORMAL_SEC
                 mode_str = "normal"
 
-            mode_clr = C.RED if mode_str == "signal" else C.YELLOW if mode_str == "golden" else C.DIM
+            if "approaching" in mode_str:
+                mode_clr = C.CYAN
+            elif mode_str == "signal":
+                mode_clr = C.RED
+            elif mode_str == "golden":
+                mode_clr = C.YELLOW
+            else:
+                mode_clr = C.DIM
             print(f"\n  {C.DIM}Next poll in{C.RESET} {mode_clr}{interval}s ({mode_str}){C.RESET}")
+
+            await asyncio.sleep(interval)
 
     except KeyboardInterrupt:
         log.info("\n  Stopped by user.")
@@ -1310,6 +1541,10 @@ async def main():
         print(f"  {C.HEADER}╠{'═'*W}╣{C.RESET}")
         print(f"  {C.HEADER}║{C.RESET}  {C.DIM}Date:{C.RESET}             {day.date_pt}"
               + " " * (W - 29) + f"{C.HEADER}║{C.RESET}")
+        fh_str = f"{day.forecast_high_f}°F" if day.forecast_high_f > 0 else "n/a"
+        print(f"  {C.HEADER}║{C.RESET}  {C.DIM}Forecast high:{C.RESET}    "
+              f"{C.EDGE}{fh_str}{C.RESET}"
+              + " " * (W - 23 - len(fh_str)) + f"{C.HEADER}║{C.RESET}")
         print(f"  {C.HEADER}║{C.RESET}  {C.DIM}METAR high:{C.RESET}       "
               f"{C.CYAN}{day.metar_high_rounded}°F{C.RESET}"
               f"  {C.DIM}(raw = {day.metar_high_f:.1f}°F){C.RESET}"

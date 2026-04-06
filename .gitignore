@@ -1,6 +1,10 @@
 # Environment
 .env
+.envy
 venv/
+
+# Claude Code
+.claude/
 
 # macOS
 .DS_Store
@@ -19,3 +23,4 @@ __pycache__/
 
 # Data logs (large, regenerated)
 data/*.csv
+data/*.log

@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.forecastbot.gateway-watchdog</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/vigneshwaranarumugam/Documents/Trading Github/forecastbot/scripts/watchdog_gateway.sh</string>
+    </array>
+
+    <!-- Run every 60 seconds -->
+    <key>StartInterval</key>
+    <integer>60</integer>
+
+    <!-- Also run at load time -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/vigneshwaranarumugam/Documents/Trading Github/forecastbot/data/watchdog_launchd.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/vigneshwaranarumugam/Documents/Trading Github/forecastbot/data/watchdog_launchd.log</string>
+</dict>
+</plist>

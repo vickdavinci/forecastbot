@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.forecastbot.condor</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/vigneshwaranarumugam/Documents/Trading Github/forecastbot/scripts/run_condor.sh</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/vigneshwaranarumugam/Documents/Trading Github/forecastbot</string>
+
+    <!-- Auto-restart if the process exits (crash, OOM, etc.) -->
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Wait 10s before restarting after a crash -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <!-- Redirect stdout/stderr for debugging -->
+    <key>StandardOutPath</key>
+    <string>/Users/vigneshwaranarumugam/Documents/Trading Github/forecastbot/data/condor_launchd_out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/vigneshwaranarumugam/Documents/Trading Github/forecastbot/data/condor_launchd_err.log</string>
+
+    <!-- Environment variables -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+</dict>
+</plist>

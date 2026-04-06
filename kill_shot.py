@@ -153,18 +153,7 @@ DAILY_SYMBOLS = [
         "max_pairs":    10,
         "catalyst":     "SP500_MOVE",
     },
-    {
-        "name":         "UHLAX",
-        "label":        "LA Daily Temperature High",
-        "symbol":       "UHLAX",
-        "secType":      "OPT",
-        "exchange":     "FORECASTX",
-        "tradingClass": "UHLAX",
-        "currency":     "USD",
-        "daily":        True,
-        "max_pairs":    10,
-        "catalyst":     "WEATHER_LA",
-    },
+    # UHLAX removed — handled by weather_edge.py with dedicated analysis
 ]
 
 PERSISTENT_SYMBOLS = [
@@ -236,6 +225,27 @@ CATALYST_EVENTS = [
     ("2026-05-08",  8, 30, "NFP Apr 2026"),
 ]
 CATALYST_WINDOW_HOURS = 2
+
+
+# ─── COLORS (256-color palette — optimised for white/light macOS terminal) ────
+
+class C:
+    RESET   = "\033[0m"
+    BOLD    = "\033[1m"
+    DIM     = "\033[38;5;242m"
+    RED     = "\033[38;5;160m"
+    GREEN   = "\033[38;5;28m"
+    YELLOW  = "\033[38;5;166m"
+    BLUE    = "\033[38;5;25m"
+    MAGENTA = "\033[38;5;127m"
+    CYAN    = "\033[38;5;30m"
+    WHITE   = "\033[30m"
+    HEADER  = "\033[38;5;25m"
+    VALUE   = "\033[1m"
+    LABEL   = "\033[38;5;242m"
+    OK      = "\033[38;5;28m"
+    WARN    = "\033[38;5;166m"
+    ALERT   = "\033[38;5;160m\033[1m"
 
 
 # ─── DATA STRUCTURES ───────────────────────────────────────────────────────────
@@ -589,12 +599,11 @@ def get_today_et() -> str:
     return datetime.now(ET).strftime("%Y%m%d")
 
 
-def next_trading_day_et() -> str:
-    """Return tomorrow's date in ET as YYYYMMDD (skips weekends)."""
-    d = datetime.now(ET).date() + timedelta(days=1)
-    while d.weekday() >= 5:  # Saturday=5, Sunday=6
-        d += timedelta(days=1)
-    return d.strftime("%Y%m%d")
+def candidate_dates_et() -> list[str]:
+    """Return candidate dates to try for daily contracts (today + next 3 days).
+    Includes weekends — ForecastEx weather contracts can settle on Sat/Sun."""
+    today = datetime.now(ET).date()
+    return [(today + timedelta(days=i)).strftime("%Y%m%d") for i in range(4)]
 
 
 async def discover_pairs_for_symbol(
@@ -674,19 +683,48 @@ async def discover_pairs_for_symbol(
     return pairs
 
 
+async def _has_live_prices(ib: IB, pairs: list[Pair], warmup_sec: int = 10) -> bool:
+    """Subscribe to pairs, wait for warmup, check if any have live prices."""
+    subscribe_all(ib, pairs)
+    await asyncio.sleep(warmup_sec)
+    live = 0
+    for p in pairs:
+        yt, nt = p.yes_ticker, p.no_ticker
+        has_activity = (
+            (yt and hasattr(yt, 'bid') and yt.bid is not None and yt.bid > 0)
+            or (yt and hasattr(yt, 'ask') and yt.ask is not None and yt.ask > 0)
+            or (nt and hasattr(nt, 'bid') and nt.bid is not None and nt.bid > 0)
+            or (nt and hasattr(nt, 'ask') and nt.ask is not None and nt.ask > 0)
+        )
+        if has_activity:
+            live += 1
+    return live > 0
+
+
 async def discover_all_pairs(ib: IB, today_str: str) -> list[Pair]:
-    """Discover all pairs for all symbols."""
+    """Discover all pairs for all symbols.
+    For daily contracts, verifies live prices — tries today first,
+    then next trading day if today's contracts are settled/stale."""
     all_pairs = []
 
     log.info("\n  ── Daily contracts ──────────────────────────────")
     for sym_cfg in DAILY_SYMBOLS:
-        pairs = await discover_pairs_for_symbol(ib, sym_cfg, today_str)
-        if not pairs:
-            # Try next trading day (in case today expired)
-            next_day = next_trading_day_et()
-            log.info(f"  {sym_cfg['name']}: today has no contracts, trying {next_day}")
-            pairs = await discover_pairs_for_symbol(ib, sym_cfg, next_day)
-        all_pairs.extend(pairs)
+        found = False
+        for date_str in candidate_dates_et():
+            pairs = await discover_pairs_for_symbol(ib, sym_cfg, date_str)
+            if not pairs:
+                continue
+            # Check for live prices before committing
+            if await _has_live_prices(ib, pairs):
+                log.info(f"  {sym_cfg['name']}: live prices on {date_str}")
+                all_pairs.extend(pairs)
+                found = True
+                break
+            else:
+                log.info(f"  {sym_cfg['name']}: no live prices for {date_str}, trying next…")
+                unsubscribe_all(ib, pairs)
+        if not found:
+            log.warning(f"  {sym_cfg['name']}: no live contracts found")
         await asyncio.sleep(0.3)
 
     log.info("\n  ── Persistent contracts ─────────────────────────")
@@ -813,15 +851,18 @@ def _open_gap(pair: Pair, mode: str, stats: dict, s: float, g: float) -> None:
     np_ = pair.no_price()
     mp = pair.max_profit_at_gap()
 
-    print(
-        f"\n  ⚡ GAP OPEN  {now_str} ET  [{mode}]\n"
-        f"     Pair:     {pair.pair_label}\n"
-        f"     YES ask:  ${yp.ask:.4f}  (depth={yp.size})\n"
-        f"     NO ask:   ${np_.ask:.4f}  (depth={np_.size})\n"
-        f"     Sum:      ${s:.4f}  Gap: ${g:.4f}\n"
-        f"     Lag leg:  {pair.gap_open_leg}\n"
-        f"     Max profit if filled: ${mp:.2f}  ({pair.min_depth()} contracts × ${g:.4f})"
-    )
+    alert_clr = C.ALERT if s < ALERT_SUM else C.WARN
+    print(f"\n  {alert_clr}┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓{C.RESET}")
+    print(f"  {alert_clr}┃{C.RESET}  GAP OPEN   {C.VALUE}{pair.pair_label}{C.RESET}"
+          f"   {C.DIM}{now_str} ET  [{mode}]{C.RESET}"
+          f"  {alert_clr}┃{C.RESET}")
+    print(f"  {alert_clr}┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛{C.RESET}")
+    print(f"    {C.DIM}YES ask:{C.RESET}    {C.VALUE}${yp.ask:.4f}{C.RESET}  {C.DIM}depth={yp.size}{C.RESET}")
+    print(f"    {C.DIM}NO ask:{C.RESET}     {C.VALUE}${np_.ask:.4f}{C.RESET}  {C.DIM}depth={np_.size}{C.RESET}")
+    print(f"    {C.DIM}Sum:{C.RESET}        {C.GREEN}${s:.4f}{C.RESET}  {C.DIM}Gap:{C.RESET} {C.GREEN}${g:.4f}{C.RESET}")
+    print(f"    {C.DIM}Lag leg:{C.RESET}    {pair.gap_open_leg}")
+    print(f"    {C.DIM}Max profit:{C.RESET} {C.VALUE}${mp:.2f}{C.RESET}"
+          f"  {C.DIM}({pair.min_depth()} contracts x ${g:.4f}){C.RESET}")
 
     if s < ALERT_SUM:
         send_telegram(
@@ -849,13 +890,11 @@ def _close_gap(pair: Pair, mode: str, stats: dict, reason: str = "REPRICED") -> 
     now_str = datetime.now(ET).strftime("%H:%M:%S.%f")[:-3]
     peak_p  = pair.gap_peak_profit
 
-    print(
-        f"\n  ✓ GAP CLOSE  {now_str} ET  "
-        f"duration={duration:.1f}s  "
-        f"peak_profit=${peak_p:.2f}  "
-        f"reason={reason}  "
-        f"[{pair.pair_label}]"
-    )
+    print(f"\n  {C.OK}✓ GAP CLOSE{C.RESET}  {C.VALUE}{pair.pair_label}{C.RESET}"
+          f"  {C.DIM}duration={C.RESET}{duration:.1f}s"
+          f"  {C.DIM}peak=${C.RESET}{peak_p:.2f}"
+          f"  {C.DIM}reason={C.RESET}{reason}"
+          f"  {C.DIM}{now_str} ET{C.RESET}")
 
     if pair.gap_open_sum < ALERT_SUM and duration >= 5.0:
         send_telegram(
@@ -888,14 +927,24 @@ async def refresh_daily_contracts(ib: IB, all_pairs: list[Pair]) -> list[Pair]:
     unsubscribe_all(ib, daily_pairs)
     await asyncio.sleep(1.0)
 
-    # Discover new daily pairs
+    # Discover new daily pairs — verify live prices
     new_daily = []
     for sym_cfg in DAILY_SYMBOLS:
-        pairs = await discover_pairs_for_symbol(ib, sym_cfg, today_str)
-        if not pairs:
-            next_day = next_trading_day_et()
-            pairs = await discover_pairs_for_symbol(ib, sym_cfg, next_day)
-        new_daily.extend(pairs)
+        found = False
+        for date_str in candidate_dates_et():
+            pairs = await discover_pairs_for_symbol(ib, sym_cfg, date_str)
+            if not pairs:
+                continue
+            if await _has_live_prices(ib, pairs):
+                log.info(f"  {sym_cfg['name']}: live prices on {date_str}")
+                new_daily.extend(pairs)
+                found = True
+                break
+            else:
+                log.info(f"  {sym_cfg['name']}: no live prices for {date_str}, trying next…")
+                unsubscribe_all(ib, pairs)
+        if not found:
+            log.warning(f"  {sym_cfg['name']}: no live contracts found on refresh")
         await asyncio.sleep(0.3)
 
     # Subscribe new daily pairs
@@ -921,7 +970,11 @@ async def connect_with_retry() -> IB:
         try:
             log.info(f"  Connecting to IB Gateway (attempt {attempt}/{MAX_RECONNECT_ATTEMPTS})...")
             await ib.connectAsync(IBKR_HOST, IBKR_PORT, clientId=IBKR_CLIENT_ID)
-            log.info("  ✓ Connected\n")
+            # Request delayed data as fallback for contracts without
+            # real-time subscription (e.g. FES/FOP). IB auto-upgrades
+            # to live when the subscription exists.
+            ib.reqMarketDataType(4)
+            log.info("  ✓ Connected (market data type: delayed-frozen fallback)\n")
             return ib
         except Exception as e:
             log.error(f"  Connection attempt {attempt} failed: {e}")
@@ -937,10 +990,25 @@ async def connect_with_retry() -> IB:
 # ─── PRINT SNAPSHOT ────────────────────────────────────────────────────────────
 
 def print_snapshot(all_pairs: list[Pair], title: str = "PRICE SNAPSHOT") -> None:
-    now_str = datetime.now(ET).strftime("%Y-%m-%d %H:%M:%S ET")
-    print(f"\n  ── {title}  {now_str}")
-    print(f"  {'PAIR':<32} {'YES_BID':>8} {'YES_ASK':>8} {'NO_BID':>8} {'NO_ASK':>8} {'SUM':>8} {'GAP':>8} {'DEPTH':>7}")
-    print(f"  {'─'*90}")
+    now_str = datetime.now(ET).strftime("%H:%M:%S ET")
+    mode, catalyst_label = current_mode()
+    mode_str = (f"{C.WARN}CATALYST: {catalyst_label}{C.RESET}"
+                if mode == "CATALYST" else f"{C.DIM}NORMAL{C.RESET}")
+
+    print(f"\n  {C.HEADER}┌─────────────────────────────────────────────────────────────────┐{C.RESET}")
+    print(f"  {C.HEADER}│{C.RESET}  {C.VALUE}{now_str}{C.RESET}   {mode_str}"
+          f"  {C.HEADER}│{C.RESET}")
+    print(f"  {C.HEADER}└─────────────────────────────────────────────────────────────────┘{C.RESET}")
+
+    print(f"\n  {C.BOLD}{C.WHITE}{title}{C.RESET}")
+    print(f"  {C.HEADER}┌──────────────────────────┬─────────┬─────────┬─────────┬────────┬───────┐{C.RESET}")
+    print(f"  {C.HEADER}│{C.RESET} {C.WHITE}Pair{C.RESET}                     "
+          f"{C.HEADER}│{C.RESET} {C.WHITE}YES ask{C.RESET} "
+          f"{C.HEADER}│{C.RESET} {C.WHITE} NO ask{C.RESET} "
+          f"{C.HEADER}│{C.RESET} {C.WHITE}   SUM{C.RESET}  "
+          f"{C.HEADER}│{C.RESET} {C.WHITE}  GAP{C.RESET}  "
+          f"{C.HEADER}│{C.RESET} {C.WHITE}Depth{C.RESET} {C.HEADER}│{C.RESET}")
+    print(f"  {C.HEADER}├──────────────────────────┼─────────┼─────────┼─────────┼────────┼───────┤{C.RESET}")
 
     daily_pairs      = [p for p in all_pairs if p.daily]
     persistent_pairs = [p for p in all_pairs if not p.daily]
@@ -948,25 +1016,52 @@ def print_snapshot(all_pairs: list[Pair], title: str = "PRICE SNAPSHOT") -> None
     for section, pairs in [("DAILY", daily_pairs), ("PERSISTENT", persistent_pairs)]:
         if not pairs:
             continue
-        print(f"  [{section}]")
+        print(f"  {C.HEADER}│{C.RESET} {C.CYAN}{C.BOLD}{section}{C.RESET}"
+              + " " * (24 - len(section))
+              + f" {C.HEADER}│{C.RESET}         "
+              f"{C.HEADER}│{C.RESET}         "
+              f"{C.HEADER}│{C.RESET}         "
+              f"{C.HEADER}│{C.RESET}        "
+              f"{C.HEADER}│{C.RESET}       {C.HEADER}│{C.RESET}")
         for pair in pairs:
             yp  = pair.yes_price()
             np_ = pair.no_price()
             s   = pair.sum_ask()
             g   = pair.gap()
-            flag = "⚡" if s < BREAKEVEN_SUM and s > 0 else " "
-            yb   = f"{yp.bid:.4f}"  if yp.bid  > 0 else "  n/a "
-            ya   = f"{yp.ask:.4f}"  if yp.ask  > 0 else "  n/a "
-            nb   = f"{np_.bid:.4f}" if np_.bid  > 0 else "  n/a "
-            na   = f"{np_.ask:.4f}" if np_.ask  > 0 else "  n/a "
-            sv   = f"{s:.4f}"       if s > 0 else "  n/a "
-            gv   = f"{g:+.4f}"      if g > -99 else "  n/a "
-            d    = pair.min_depth()
-            print(
-                f"  {flag} {pair.pair_label:<30} "
-                f"{yb:>8} {ya:>8} {nb:>8} {na:>8} {sv:>8} {gv:>8} {d:>7}"
-            )
-    print()
+            d   = pair.min_depth()
+
+            ya = f"${yp.ask:.4f}" if yp.ask > 0 else f"{C.DIM}  n/a {C.RESET}"
+            na = f"${np_.ask:.4f}" if np_.ask > 0 else f"{C.DIM}  n/a {C.RESET}"
+
+            if s > 0 and s < BREAKEVEN_SUM:
+                sum_clr = C.GREEN
+                gap_clr = C.GREEN
+                flag = f"{C.GREEN}*{C.RESET}"
+            elif s > 0 and s < 1.0:
+                sum_clr = C.YELLOW
+                gap_clr = C.YELLOW
+                flag = " "
+            elif s > 0:
+                sum_clr = C.RED
+                gap_clr = C.DIM
+                flag = " "
+            else:
+                sum_clr = C.DIM
+                gap_clr = C.DIM
+                flag = " "
+
+            sv = f"{sum_clr}${s:.4f}{C.RESET}" if s > 0 else f"{C.DIM}  n/a {C.RESET}"
+            gv = f"{gap_clr}{g:+.4f}{C.RESET}" if g > -99 else f"{C.DIM}  n/a{C.RESET}"
+
+            label = pair.pair_label[:24]
+            print(f"  {C.HEADER}│{C.RESET}{flag}{C.VALUE}{label:<25}{C.RESET}"
+                  f"{C.HEADER}│{C.RESET} {ya:>7} "
+                  f"{C.HEADER}│{C.RESET} {na:>7} "
+                  f"{C.HEADER}│{C.RESET} {sv:>7} "
+                  f"{C.HEADER}│{C.RESET} {gv:>6} "
+                  f"{C.HEADER}│{C.RESET} {d:>5} {C.HEADER}│{C.RESET}")
+
+    print(f"  {C.HEADER}└──────────────────────────┴─────────┴─────────┴─────────┴────────┴───────┘{C.RESET}")
 
 
 # ─── FINAL ANALYSIS ────────────────────────────────────────────────────────────
@@ -982,38 +1077,61 @@ def print_final_analysis(all_pairs: list[Pair], run_days: float) -> None:
     quality_pct   = (100 * total_valid / total_ticks) if total_ticks > 0 else 0
     gaps_per_week = (total_gaps / run_days * 7) if run_days > 0 else 0
 
-    print("\n" + "=" * 70)
-    print("  PHASE 0 FINAL ANALYSIS")
-    print("=" * 70)
-    print(f"  Run duration:            {run_days:.1f} days")
-    print(f"  Total ticks processed:   {total_ticks:,}")
-    print(f"  Valid ticks (both legs): {total_valid:,}  ({quality_pct:.1f}% quality)")
-    print(f"  Total gap events:        {total_gaps}  ({gaps_per_week:.1f}/week)")
-    print(f"  Avg gap duration:        {avg_dur:.1f}s")
-    print(f"  Largest gap seen:        ${max_gap:.4f}")
-    print(f"  Max depth at gap:        {max_depth} contracts")
-    print()
-    print(f"  {'PAIR':<32} {'GAPS':>6} {'MAX_GAP':>10} {'AVG_DUR':>10} {'QUALITY%':>10}")
-    print(f"  {'─'*72}")
+    W = 63
+    print(f"\n  {C.HEADER}╔{'═'*W}╗{C.RESET}")
+    print(f"  {C.HEADER}║{C.RESET}  {C.BOLD}{C.WHITE}PHASE 0 FINAL ANALYSIS{C.RESET}"
+          + " " * (W - 24) + f"{C.HEADER}║{C.RESET}")
+    print(f"  {C.HEADER}╠{'═'*W}╣{C.RESET}")
+    print(f"  {C.HEADER}║{C.RESET}  {C.DIM}Run duration:{C.RESET}        {run_days:.1f} days"
+          + " " * (W - 30) + f"{C.HEADER}║{C.RESET}")
+    print(f"  {C.HEADER}║{C.RESET}  {C.DIM}Total ticks:{C.RESET}         {total_ticks:,}"
+          + " " * max(0, W - 25 - len(f"{total_ticks:,}")) + f"{C.HEADER}║{C.RESET}")
+    print(f"  {C.HEADER}║{C.RESET}  {C.DIM}Valid ticks:{C.RESET}         {total_valid:,}  ({quality_pct:.1f}%)"
+          + " " * max(0, W - 32 - len(f"{total_valid:,}") - len(f"{quality_pct:.1f}")) + f"{C.HEADER}║{C.RESET}")
+    print(f"  {C.HEADER}║{C.RESET}  {C.DIM}Gap events:{C.RESET}          {C.VALUE}{total_gaps}{C.RESET}  ({gaps_per_week:.1f}/week)"
+          + " " * max(0, W - 35 - len(str(total_gaps)) - len(f"{gaps_per_week:.1f}")) + f"{C.HEADER}║{C.RESET}")
+    print(f"  {C.HEADER}║{C.RESET}  {C.DIM}Avg gap duration:{C.RESET}    {avg_dur:.1f}s"
+          + " " * max(0, W - 27 - len(f"{avg_dur:.1f}")) + f"{C.HEADER}║{C.RESET}")
+    print(f"  {C.HEADER}║{C.RESET}  {C.DIM}Largest gap:{C.RESET}         ${max_gap:.4f}"
+          + " " * (W - 28) + f"{C.HEADER}║{C.RESET}")
+    print(f"  {C.HEADER}║{C.RESET}  {C.DIM}Max depth at gap:{C.RESET}    {max_depth}"
+          + " " * max(0, W - 25 - len(str(max_depth))) + f"{C.HEADER}║{C.RESET}")
+    print(f"  {C.HEADER}╚{'═'*W}╝{C.RESET}")
+
+    print(f"\n  {C.BOLD}{C.WHITE}PER-PAIR BREAKDOWN{C.RESET}")
+    print(f"  {C.HEADER}┌──────────────────────────────────┬───────┬──────────┬──────────┬──────────┐{C.RESET}")
+    print(f"  {C.HEADER}│{C.RESET} {C.WHITE}Pair{C.RESET}                             "
+          f"{C.HEADER}│{C.RESET} {C.WHITE} Gaps{C.RESET}  "
+          f"{C.HEADER}│{C.RESET} {C.WHITE} Max Gap{C.RESET}  "
+          f"{C.HEADER}│{C.RESET} {C.WHITE} Avg Dur{C.RESET}  "
+          f"{C.HEADER}│{C.RESET} {C.WHITE}Quality%{C.RESET}  {C.HEADER}│{C.RESET}")
+    print(f"  {C.HEADER}├──────────────────────────────────┼───────┼──────────┼──────────┼──────────┤{C.RESET}")
     for p in sorted(all_pairs, key=lambda x: x.total_gaps, reverse=True)[:20]:
         avg_d = (p.total_gap_seconds / p.total_gaps) if p.total_gaps > 0 else 0
-        print(
-            f"  {p.pair_label:<32} {p.total_gaps:>6} "
-            f"{p.max_gap:>10.4f} {avg_d:>10.1f}s {p.data_quality_pct():>9.1f}%"
-        )
-    print()
+        g_clr = C.GREEN if p.total_gaps > 0 else C.DIM
+        q_clr = C.GREEN if p.data_quality_pct() > 80 else C.YELLOW if p.data_quality_pct() > 40 else C.RED
+        label = p.pair_label[:32]
+        print(f"  {C.HEADER}│{C.RESET} {label:<32} "
+              f"{C.HEADER}│{C.RESET} {g_clr}{p.total_gaps:>5}{C.RESET} "
+              f"{C.HEADER}│{C.RESET} {p.max_gap:>8.4f} "
+              f"{C.HEADER}│{C.RESET} {avg_d:>7.1f}s "
+              f"{C.HEADER}│{C.RESET} {q_clr}{p.data_quality_pct():>7.1f}%{C.RESET} {C.HEADER}│{C.RESET}")
+    print(f"  {C.HEADER}└──────────────────────────────────┴───────┴──────────┴──────────┴──────────┘{C.RESET}")
 
     if max_depth >= 500 and gaps_per_week >= 5:
-        verdict = "✓ STRONG — BUILD EXECUTION ENGINE (US account + all daily contracts)"
+        verdict_clr = C.OK
+        verdict = "STRONG — BUILD EXECUTION ENGINE"
     elif max_depth >= 200 and gaps_per_week >= 2:
-        verdict = "≈ MODERATE — Build light execution engine, US account worthwhile"
+        verdict_clr = C.YELLOW
+        verdict = "MODERATE — Build light execution engine"
     elif total_gaps >= 1:
-        verdict = "⚠ WEAK — Gaps exist but thin. US daily contracts may solve depth problem"
+        verdict_clr = C.WARN
+        verdict = "WEAK — Gaps exist but thin"
     else:
-        verdict = "✗ NO GAPS — Thesis not confirmed on this universe. Redirect to VASS"
+        verdict_clr = C.RED
+        verdict = "NO GAPS — Thesis not confirmed on this universe"
 
-    print(f"  VERDICT: {verdict}")
-    print()
+    print(f"\n  {C.DIM}Verdict:{C.RESET} {verdict_clr}{C.BOLD}{verdict}{C.RESET}\n")
 
     write_quality_report(all_pairs)
 
@@ -1032,15 +1150,26 @@ def print_final_analysis(all_pairs: list[Pair], run_days: float) -> None:
 # ─── MAIN ──────────────────────────────────────────────────────────────────────
 
 async def main():
-    print("\n" + "=" * 70)
-    print("  ForecastBot Phase 0 — Kill-Shot v2.0")
-    print(f"  Started: {datetime.now(ET).strftime('%Y-%m-%d %H:%M:%S ET')}")
-    print(f"  Universe: {[s['name'] for s in ALL_SYMBOLS]}")
-    print(f"  Breakeven threshold: sum < ${BREAKEVEN_SUM:.2f}")
-    print(f"  Alert threshold:     sum < ${ALERT_SUM:.2f} (gap > $0.07)")
-    print(f"  Confirmation ticks:  {CONFIRM_TICKS} consecutive")
-    print("  *** READ ONLY — STREAMING — NO ORDERS ***")
-    print("=" * 70 + "\n")
+    W = 63
+    now_str = datetime.now(ET).strftime("%Y-%m-%d %H:%M:%S ET")
+    syms = ", ".join(s["name"] for s in ALL_SYMBOLS)
+
+    print(f"\n  {C.HEADER}╔{'═'*W}╗{C.RESET}")
+    print(f"  {C.HEADER}║{C.RESET}  {C.BOLD}{C.WHITE}ForecastBot — Kill-Shot Parity Scanner v2.0{C.RESET}"
+          + " " * (W - 45) + f"{C.HEADER}║{C.RESET}")
+    print(f"  {C.HEADER}║{C.RESET}  {C.DIM}Started:{C.RESET} {now_str}"
+          + " " * (W - 31) + f"{C.HEADER}║{C.RESET}")
+    print(f"  {C.HEADER}║{C.RESET}  {C.DIM}Universe:{C.RESET} {syms}"
+          + " " * max(0, W - 12 - len(syms)) + f"{C.HEADER}║{C.RESET}")
+    print(f"  {C.HEADER}║{C.RESET}  {C.DIM}Breakeven:{C.RESET} sum < ${BREAKEVEN_SUM:.2f}"
+          f"  {C.DIM}│{C.RESET}  {C.DIM}Alert:{C.RESET} sum < ${ALERT_SUM:.2f}"
+          + " " * (W - 48) + f"{C.HEADER}║{C.RESET}")
+    print(f"  {C.HEADER}║{C.RESET}  {C.DIM}Confirm:{C.RESET} {CONFIRM_TICKS} ticks"
+          f"  {C.DIM}│{C.RESET}  {C.DIM}Streaming:{C.RESET} 0.5s"
+          + " " * (W - 40) + f"{C.HEADER}║{C.RESET}")
+    print(f"  {C.HEADER}║{C.RESET}  {C.RED}{C.BOLD}*** OBSERVATION ONLY — NO ORDERS ***{C.RESET}"
+          + " " * (W - 38) + f"{C.HEADER}║{C.RESET}")
+    print(f"  {C.HEADER}╚{'═'*W}╝{C.RESET}\n")
 
     init_logs()
     run_start = time.time()
@@ -1084,11 +1213,13 @@ async def main():
     )
 
     # ── Main loop ──────────────────────────────────────────────────────────────
+    SNAPSHOT_INTERVAL_SEC = 300   # print snapshot every 5 minutes
+
     daily_stats:      dict     = {}
     last_date:        str      = datetime.now(ET).strftime("%Y-%m-%d")
     last_heartbeat:   datetime = datetime.now(ET)
     last_daily_refresh: str   = today_str
-    last_snapshot_min: int    = -1
+    last_snapshot_ts:  float  = 0.0
 
     log.info("  Streaming... (Ctrl+C to stop)\n")
 
@@ -1139,10 +1270,11 @@ async def main():
             for pair in all_pairs:
                 process_pair_tick(pair, mode, daily_stats)
 
-            # ── Hourly snapshot to console ─────────────────────────────────────
-            if now_et.minute == 0 and now_et.minute != last_snapshot_min:
-                last_snapshot_min = now_et.minute
-                print_snapshot(all_pairs, f"HOURLY SNAPSHOT [{mode}]")
+            # ── Periodic snapshot to console (every 5 min) ───────────────────
+            now_ts = time.time()
+            if now_ts - last_snapshot_ts >= SNAPSHOT_INTERVAL_SEC:
+                last_snapshot_ts = now_ts
+                print_snapshot(all_pairs, "PRICE SNAPSHOT")
 
             # ── Heartbeat every 30 minutes ─────────────────────────────────────
             if (now_et - last_heartbeat).total_seconds() >= 1800:
@@ -1153,16 +1285,21 @@ async def main():
                 qpct        = (100 * total_valid / total_ticks) if total_ticks > 0 else 0
 
                 log.info(
-                    f"  [HEARTBEAT] {now_et.strftime('%Y-%m-%d %H:%M ET')}  "
-                    f"mode={mode}  gaps_total={total_g}  "
-                    f"open_now={open_gaps}  "
-                    f"data_quality={qpct:.1f}%"
+                    f"  {C.DIM}[HEARTBEAT]{C.RESET} {now_et.strftime('%H:%M ET')}"
+                    f"  {C.DIM}mode={C.RESET}{mode}"
+                    f"  {C.DIM}gaps={C.RESET}{total_g}"
+                    f"  {C.DIM}open={C.RESET}{open_gaps}"
+                    f"  {C.DIM}quality={C.RESET}{qpct:.1f}%"
                 )
                 last_heartbeat = now_et
 
             # ── Catalyst mode banner ───────────────────────────────────────────
             if mode == "CATALYST" and now_et.second < 1:
-                log.info(f"  🔥 CATALYST ACTIVE: {catalyst_label}  {now_et.strftime('%H:%M:%S ET')}")
+                log.info(
+                    f"  {C.WARN}{C.BOLD}CATALYST ACTIVE:{C.RESET}"
+                    f" {C.VALUE}{catalyst_label}{C.RESET}"
+                    f"  {C.DIM}{now_et.strftime('%H:%M:%S ET')}{C.RESET}"
+                )
 
     except KeyboardInterrupt:
         log.info("\n  Stopped by user.")
